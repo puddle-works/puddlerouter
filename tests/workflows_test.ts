@@ -130,6 +130,30 @@ Deno.test("reply waits for pick and execute and gets their results", async () =>
   assert(inputs.matchKind.includes("steps.match.outputs.kind"));
 });
 
+Deno.test("raise only runs in live mode for a turn nothing can answer, keyed by sourceRef", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "raise");
+  assertEquals(step.allowFailure, true);
+  assertEquals(step.task.modelIdOrName, "github");
+  assertEquals(step.task.methodName, "create_issue");
+  const guard = step.guard ?? "";
+  for (
+    const part of [
+      'inputs.mode == "live"',
+      'steps.match.outputs.kind != "recipe"',
+      'steps.pick.outputs.choice != "none"',
+      "steps.pick.outputs.confidence >= inputs.cutoff",
+    ]
+  ) assert(guard.includes(part), `guard lacks ${part}`);
+  const inputs = step.task.inputs as Record<string, string>;
+  assert(inputs.idempotencyKey.includes("steps.match.outputs.issueKey"));
+  const reply = await stepOf("workflow-puddlerouter.yaml", "reply");
+  assert(
+    (reply.task.inputs as Record<string, string>).issueUrl.includes(
+      "steps.raise.outputs",
+    ),
+  );
+});
+
 async function readYaml(path: string) {
   return parse(await Deno.readTextFile(new URL(`../${path}`, import.meta.url)));
 }

@@ -16,6 +16,7 @@ import {
   effectiveRoute,
   executeRecipe,
   findMatch,
+  issueDraft,
   loadTurn,
   looksSecret,
   model,
@@ -551,7 +552,7 @@ Deno.test("buildReply passes when the pick is none, unsure or out of range", () 
       pickConfidence,
     });
     assertEquals(r.action, "pass");
-    assertEquals(r.reason, "no extension found");
+    assertEquals(r.reason, "no extension found, no issue raised");
   }
 });
 
@@ -608,4 +609,83 @@ Deno.test("findMatch offers only allowlisted extensions", async () => {
   });
   const m = await findMatch("list the hetzner servers", exec);
   assertEquals(m.candidates.map((c) => c.name), ["@swamp/hetzner-cloud"]);
+});
+
+// ---- step 4: raise an issue when nothing can answer ----
+
+Deno.test("issueDraft makes a one-line title, a body with the turn, and a key", () => {
+  const d = issueDraft(
+    "list the hetzner servers\nin my account " + "x".repeat(200),
+    "puddlerouter:0123456789abcdef",
+    "hetzner servers account",
+    [{ name: "@swamp/hetzner-cloud", description: "Hetzner" }],
+  );
+  assert(d.title.startsWith("Recipe wanted: list the hetzner servers in my"));
+  assert(d.title.length <= 100, `${d.title.length}`);
+  assert(!d.title.includes("\n"));
+  assertMatch(d.body, /> list the hetzner servers\n> in my account/);
+  assertMatch(d.body, /puddlerouter:0123456789abcdef/);
+  assertMatch(d.body, /hetzner servers account/);
+  assertMatch(d.body, /@swamp\/hetzner-cloud/);
+  assertEquals(d.key, "puddlerouter:0123456789abcdef");
+});
+
+Deno.test("findMatch carries the issue draft for a turn nothing can answer", async () => {
+  const m = await findMatch(
+    "list the hetzner servers",
+    fakeExec({}).exec,
+    new Date(),
+    "puddlerouter:0123456789abcdef",
+  );
+  assertEquals(m.kind, "none");
+  assertEquals(m.issueKey, "puddlerouter:0123456789abcdef");
+  assertMatch(m.issueTitle, /^Recipe wanted: list the hetzner servers/);
+  assertMatch(m.issueBody, /Raised by puddlerouter/);
+});
+
+Deno.test("buildReply blocks with the issue link when one was raised", () => {
+  const r = buildReply({
+    ...detArgs,
+    matchKind: "none",
+    issueUrl: "https://github.com/puddle-works/puddleworks-apps/issues/7",
+  });
+  assertEquals(r.action, "block");
+  assertMatch(r.text, /issues\/7/);
+  assertMatch(r.text, /starting with llm:/);
+  assertEquals(
+    r.issue,
+    "https://github.com/puddle-works/puddleworks-apps/issues/7",
+  );
+  assertEquals(r.reason, "no extension found, issue raised");
+});
+
+Deno.test("buildReply passes when the issue could not be raised", () => {
+  const r = buildReply({ ...detArgs, matchKind: "none", issueUrl: "" });
+  assertEquals(r.action, "pass");
+  assertEquals(r.reason, "no extension found, no issue raised");
+});
+
+Deno.test("buildReply in shadow mode records that live would raise an issue", () => {
+  const r = buildReply({ ...detArgs, mode: "shadow", matchKind: "none" });
+  assertEquals(r.action, "pass");
+  assertEquals(r.wouldAction, "block");
+  assertMatch(r.reason, /would raise an issue/);
+});
+
+Deno.test("buildReply does not raise an issue for a failed recipe or a hint", () => {
+  const failed = buildReply({
+    ...detArgs,
+    matchKind: "recipe",
+    recipeId: "git-status",
+    resultOk: false,
+  });
+  assertEquals(failed.wouldAction, "pass");
+  const hint = buildReply({
+    ...detArgs,
+    matchKind: "candidates",
+    candidates: cands,
+    pickChoice: "c1",
+    pickConfidence: 0.9,
+  });
+  assertEquals(hint.action, "hint");
 });

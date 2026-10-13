@@ -6,7 +6,7 @@
     {
       "id": "credentials-secrets",
       "verdict": "pass",
-      "note": "The model holds no credentials. The Jev key is read by @swamp/typesafe-ai from the vault. load withholds any turn that looks like it holds a secret (token, key, password, email, long hex): stored text is a placeholder and the Jev steps are skipped (tested). match and execute run only `swamp` on the PATH with fixed arguments: the recipe's regex captures digits only and they go in with --literal-inputs, so turn text is never a swamp input; only @swamp/* and @mesgme/* extensions are pulled or run, and only read-only recipes."
+      "note": "The model holds no credentials. The Jev key is read by @swamp/typesafe-ai from the vault. load withholds any turn that looks like it holds a secret (token, key, password, email, long hex): stored text is a placeholder and the Jev steps are skipped (tested). match and execute run only `swamp` on the PATH with fixed arguments: the recipe's regex captures digits only and they go in with --literal-inputs, so turn text is never a swamp input; only @swamp/* and @mesgme/* extensions are pulled or run, and only read-only recipes. raise passes only the cleaned turn (never a withheld one) to @webframp/github's create_issue, which uses the user's gh login; the repo and key are fixed by the workflow."
     },
     {
       "id": "logging-quality",
@@ -26,7 +26,7 @@
     {
       "id": "idempotency-resilience",
       "verdict": "pass",
-      "note": "Each method writes one fixed-name resource as a new version; repeating a run adds a version and changes nothing else."
+      "note": "Each method writes one fixed-name resource as a new version; repeating a run adds a version and changes nothing else. The issue is keyed by the turn's sourceRef, so a repeated turn reuses the issue (verified live)."
     },
     {
       "id": "api-contracts",

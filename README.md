@@ -4,11 +4,11 @@
 Claude spends effort on it. A `UserPromptSubmit` hook hands the turn to a swamp
 workflow, and Jev (TypeSafe's System One model) picks a route:
 
-| Route           | Meaning                                                 | What happens (once built)                                                                                                                   |
-| --------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deterministic` | A program could answer it exactly through an API or CLI | A built-in recipe runs and its answer is shown (step 3: `@swamp/git` status, log, branch); otherwise Claude gets a hint naming an extension |
-| `decision`      | A yes/no judgement about text in the turn               | Jev answers it (built in step 2)                                                                                                            |
-| `llm`           | Anything else, or Jev is unsure                         | Claude runs as normal                                                                                                                       |
+| Route           | Meaning                                                 | What happens (once built)                                                                                                                                                                                        |
+| --------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deterministic` | A program could answer it exactly through an API or CLI | A built-in recipe runs and its answer is shown (`@swamp/git` status, log, branch); otherwise Claude gets a hint naming an extension, or, if none fits, one GitHub issue is raised and its link shown (live mode) |
+| `decision`      | A yes/no judgement about text in the turn               | Jev answers it (built in step 2)                                                                                                                                                                                 |
+| `llm`           | Anything else, or Jev is unsure                         | Claude runs as normal                                                                                                                                                                                            |
 
 **Status: shadow mode, decision and deterministic routes built (steps 2 and
 3).** The hook logs what live mode would do and never blocks: Claude always
@@ -36,6 +36,8 @@ prompt ─▶ hooks/puddlerouter.sh
              match  deterministic turn: a built-in recipe, else search extensions
              pick   jev.choice over up to 3 allowlisted candidates, or none
              execute run the recipe through swamp (@swamp/git), read-only
+             raise  live mode, nothing can answer: one issue per turn (sourceRef)
+                    in puddle-works/puddleworks-apps via @webframp/github
              reply  {action: block|hint|pass, text} → reply
 ```
 
@@ -63,6 +65,17 @@ checked first:
   three or more characters, from `searchQuery` in `_lib/recipes.ts`.
 - Only `@swamp/*` and `@mesgme/*` extensions are pulled or run (`isAllowed`),
   and only recipes marked read-only.
+
+## Issues
+
+In live mode, a deterministic turn that no recipe or allowlisted extension can
+answer raises one GitHub issue ("Recipe wanted: …", with the cleaned turn text)
+in `puddle-works/puddleworks-apps`, and the hook shows its link instead of
+running Claude. `@webframp/github`'s `create_issue` de-duplicates on the turn's
+`sourceRef`, so sending the same turn again reuses the issue. It runs `gh` with
+your logged-in `gh auth` (no token in the vault) and is the only third-party
+extension used: it is not pulled by the allowlist, only by this repo. Shadow
+mode never raises an issue; `wouldAction` records that it would.
 
 ## Set up
 

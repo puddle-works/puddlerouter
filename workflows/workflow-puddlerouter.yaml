@@ -6,7 +6,9 @@ description: >-
   route, Jev answers the yes/no question on the decision route, on the
   deterministic route a built-in recipe runs or Jev picks an extension that
   search found, and reply stores what the hook should do. In live mode a
-  confident answer blocks the turn with Jev's or the recipe's answer. In shadow mode the reply always passes, so the run
+  confident answer blocks the turn with Jev's or the recipe's answer, and a
+  deterministic turn nothing can answer raises one GitHub issue (live mode
+  only; one per distinct turn). In shadow mode the reply always passes, so the run
   is a log of what live mode would do. The route question must stay the same
   as in puddlerouter-route-eval, and the decision question as in
   puddlerouter-decision-eval.
@@ -39,6 +41,10 @@ inputs:
       type: number
       default: 0
       description: When the hook started, in ms since the epoch; reply records the time since.
+    issueRepo:
+      type: string
+      default: puddle-works/puddleworks-apps
+      description: The repo an issue is raised in when nothing can answer a deterministic turn (live mode only).
     repoDir:
       type: string
       default: "."
@@ -46,7 +52,7 @@ inputs:
   required: [turnFile]
 jobs:
   - name: main
-    description: load, route, decide, match, pick, execute, reply.
+    description: load, route, decide, match, pick, execute, raise, reply.
     dependsOn: []
     weight: 0
     steps:
@@ -141,6 +147,7 @@ jobs:
           methodName: match
           inputs:
             text: ${{ steps.load.outputs.text }}
+            sourceRef: ${{ steps.load.outputs.sourceRef }}
       - name: pick
         description: >-
           Ask Jev which extension search found, if any, can answer the turn.
@@ -184,6 +191,35 @@ jobs:
             recipeId: ${{ steps.match.outputs.recipeId }}
             captures: ${{ steps.match.outputs.captures }}
             repoDir: ${{ inputs.repoDir }}
+      - name: raise
+        description: >-
+          Raise one GitHub issue (de-duplicated by the turn's sourceRef) for a
+          deterministic turn that no recipe or allowlisted extension can
+          answer. Live mode only, so shadow mode has no side effects.
+        dependsOn:
+          - step: match
+            condition:
+              type: always
+          - step: pick
+            condition:
+              type: always
+        weight: 0
+        allowFailure: true
+        guard: >-
+          ${{ !(inputs.mode == "live" && has(steps.match) &&
+          has(steps.match.outputs) && steps.match.outputs.kind != "recipe" &&
+          !(steps.match.outputs.kind == "candidates" && has(steps.pick) &&
+          has(steps.pick.outputs) && steps.pick.outputs.choice != "none" &&
+          steps.pick.outputs.confidence >= inputs.cutoff)) }}
+        task:
+          type: model_method
+          modelIdOrName: github
+          methodName: create_issue
+          inputs:
+            repo: ${{ inputs.issueRepo }}
+            title: ${{ steps.match.outputs.issueTitle }}
+            body: ${{ steps.match.outputs.issueBody }}
+            idempotencyKey: ${{ steps.match.outputs.issueKey }}
       - name: reply
         description: Store what the hook should do. Runs whether or not Jev answered.
         dependsOn:
@@ -200,6 +236,9 @@ jobs:
             condition:
               type: always
           - step: execute
+            condition:
+              type: always
+          - step: raise
             condition:
               type: always
         weight: 0
@@ -225,3 +264,4 @@ jobs:
             resultText: '${{ has(steps.execute) && has(steps.execute.outputs) ? steps.execute.outputs.text : "" }}'
             pickChoice: '${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.choice : "" }}'
             pickConfidence: '${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.confidence : 0.0 }}'
+            issueUrl: '${{ has(steps.raise) && has(steps.raise.outputs) ? steps.raise.outputs.result : "" }}'

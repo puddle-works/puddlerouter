@@ -35,5 +35,22 @@
     "filesChecksum": "6a29c0663d490efcdc2d74a07962ee2b5b118bafab3cc135dde4b687b1b8fb5f",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
+  },
+  "@webframp/github": {
+    "version": "2026.10.12.1",
+    "pulledAt": "2026-10-13T11:22:53.851Z",
+    "files": [
+      ".swamp/bundles/9d92b9c9/github/repos.js",
+      ".swamp/bundles/9d92b9c9/github/triage.js",
+      ".swamp/pulled-extensions/@webframp/github/files/LICENSE.md",
+      ".swamp/pulled-extensions/@webframp/github/files/README.md",
+      ".swamp/pulled-extensions/@webframp/github/manifest.yaml",
+      ".swamp/pulled-extensions/@webframp/github/models/github/repos.ts",
+      ".swamp/pulled-extensions/@webframp/github/models/github/triage.ts"
+    ],
+    "checksum": "39f1e7a156b7fc3c0a5a8d2b641a1b37b232189684a59fd14cbce673107bddc2",
+    "filesChecksum": "d59f7eb74beaa3cf3616422ea810e1a8b4ace8550a8a1b6c7aaf8fce57fdb8d5",
+    "serverUrl": "https://swamp-club.com",
+    "publishedChannel": "stable"
   }
 }

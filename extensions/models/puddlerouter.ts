@@ -78,6 +78,9 @@ export type Turn = z.infer<typeof TurnSchema>;
 /** Arguments for `match`. */
 export const MatchArgsSchema = z.object({
   text: z.string().describe("The cleaned turn text."),
+  sourceRef: z.string().optional().describe(
+    "The turn's sourceRef; the key of the issue raised for it.",
+  ),
 });
 /** The arguments `match` accepts. */
 export type MatchArgs = z.infer<typeof MatchArgsSchema>;
@@ -130,6 +133,9 @@ export const ReplyArgsSchema = z.object({
   pickConfidence: z.number().optional().describe(
     "Jev's confidence in the pick.",
   ),
+  issueUrl: z.string().optional().describe(
+    "The issue raised for a turn nothing could answer; empty if none was.",
+  ),
 });
 /** The arguments `reply` accepts. */
 export type ReplyArgs = z.infer<typeof ReplyArgsSchema>;
@@ -158,6 +164,8 @@ export const ReplySchema = z.object({
   recipe: z.string(),
   /** The extension hinted at on the deterministic route; empty if none. */
   extension: z.string(),
+  /** The issue raised when nothing could answer the turn; empty if none. */
+  issue: z.string(),
   sourceRef: z.string(),
   /** Why the action was chosen. */
   reason: z.string(),
@@ -302,6 +310,11 @@ export const MatchSchema = z.object({
   candidates: z.array(z.object({ name: z.string(), description: z.string() })),
   /** Criteria for Jev's pick: c1..c3 and none. */
   criteria: z.record(z.string(), z.string()),
+  /** The issue to raise if nothing can answer the turn. */
+  issueTitle: z.string(),
+  issueBody: z.string(),
+  /** Idempotency key: the turn's sourceRef, so one issue per distinct turn. */
+  issueKey: z.string(),
   matchedAt: z.iso.datetime(),
 });
 /** The stored match. */
@@ -331,6 +344,37 @@ function criteriaFor(candidates: Match["candidates"]): Record<string, string> {
   return criteria;
 }
 
+/** The issue to raise for a turn no recipe or extension can answer. */
+export function issueDraft(
+  text: string,
+  sourceRef: string,
+  query: string,
+  candidates: Match["candidates"],
+): { title: string; body: string; key: string } {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  const title = `Recipe wanted: ${oneLine.slice(0, 80)}`;
+  const searched = query ? `\`${query}\`` : "nothing (no content words)";
+  const found = candidates.length
+    ? candidates.map((c) => `- ${c.name}`).join("\n")
+    : "- none on the allowlist";
+  const body = [
+    "A turn was routed `deterministic` but no built-in recipe or allowlisted",
+    "extension could answer it.",
+    "",
+    "Turn:",
+    "",
+    text.replace(/^/gm, "> "),
+    "",
+    `Searched for: ${searched}`,
+    "",
+    "Found:",
+    found,
+    "",
+    `Raised by puddlerouter (${sourceRef}).`,
+  ].join("\n");
+  return { title, body, key: sourceRef };
+}
+
 async function searchJson(exec: Exec, args: string[]): Promise<unknown> {
   try {
     const res = await exec(args);
@@ -348,7 +392,12 @@ export async function findMatch(
   text: string,
   exec: Exec,
   now: Date = new Date(),
+  sourceRef = "",
 ): Promise<Match> {
+  const draft = (query: string, candidates: Match["candidates"]) => {
+    const d = issueDraft(text, sourceRef, query, candidates);
+    return { issueTitle: d.title, issueBody: d.body, issueKey: d.key };
+  };
   const base = {
     recipeId: "",
     captures: [] as string[],
@@ -364,10 +413,18 @@ export async function findMatch(
       recipeId: hit.recipe.id,
       captures: hit.captures,
       criteria: criteriaFor([]),
+      ...draft("", []),
     };
   }
   const query = searchQuery(text);
-  if (!query) return { ...base, kind: "none", criteria: criteriaFor([]) };
+  if (!query) {
+    return {
+      ...base,
+      kind: "none",
+      criteria: criteriaFor([]),
+      ...draft("", []),
+    };
+  }
   const [local, registry] = await Promise.all([
     searchJson(exec, ["model", "type", "search", query, "--json"]),
     searchJson(exec, ["extension", "search", query, "--json"]),
@@ -402,6 +459,7 @@ export async function findMatch(
     query,
     candidates,
     criteria: criteriaFor(candidates),
+    ...draft(query, candidates),
   };
 }
 
@@ -446,6 +504,13 @@ export function recipeText(recipeId: string, answer: string): string {
     "Claude. To ask Claude instead, send the prompt again starting with llm:";
 }
 
+/** The text shown when no extension could answer and an issue was raised. */
+export function issueText(url: string): string {
+  return `No swamp recipe or extension can answer this yet. Raised ${url}.\n\n` +
+    "Answered by puddlerouter without Claude. To ask Claude instead, send " +
+    "the prompt again starting with llm:";
+}
+
 /** The context added when search found an extension but no recipe covers it. */
 export function extensionHint(name: string): string {
   return `puddlerouter: this looks answerable by a program. The swamp ` +
@@ -484,6 +549,7 @@ export function buildReply(
   let text = "";
   let recipe = "";
   let extension = "";
+  let issue = "";
   let reason: string;
   if (!choice) reason = "no route answer";
   else if (route !== choice) reason = "confidence below cut-off";
@@ -506,7 +572,15 @@ export function buildReply(
       extension = candidate.name;
       text = extensionHint(candidate.name);
       reason = `extension ${candidate.name}, no recipe`;
-    } else reason = "no extension found";
+    } else if (args.mode === "shadow") {
+      wouldAction = "block";
+      reason = "no extension found, would raise an issue";
+    } else if (args.issueUrl) {
+      wouldAction = "block";
+      issue = args.issueUrl;
+      text = issueText(args.issueUrl);
+      reason = "no extension found, issue raised";
+    } else reason = "no extension found, no issue raised";
   } else if (!complete) reason = "decision text not in the turn";
   else if (answer === null) reason = "no decision answer";
   else if (answer === "unsure") reason = "decision unsure";
@@ -530,6 +604,7 @@ export function buildReply(
     answerCutoff,
     recipe,
     extension,
+    issue,
     sourceRef: args.sourceRef,
     reason: shadow ? `shadow: ${reason}` : reason,
     elapsedMs: args.hookStartedAt ? now.getTime() - args.hookStartedAt : null,
@@ -586,7 +661,12 @@ export const model = {
       arguments: MatchArgsSchema,
       execute: async (args: MatchArgs, context: MethodContext) => {
         context.logger.info("Matching turn", {});
-        const match = await findMatch(args.text, swampExec);
+        const match = await findMatch(
+          args.text,
+          swampExec,
+          new Date(),
+          args.sourceRef,
+        );
         const handle = await context.writeResource("match", "match", match);
         context.logger.info("Matched {kind} {recipeId}", {
           kind: match.kind,
