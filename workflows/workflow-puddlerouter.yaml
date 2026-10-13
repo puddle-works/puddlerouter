@@ -52,7 +52,7 @@ inputs:
   required: [turnFile]
 jobs:
   - name: main
-    description: load, route, decide, match, pick, execute, raise, reply.
+    description: load, recall, route, decide, match, pick, execute, raise, reply.
     dependsOn: []
     weight: 0
     steps:
@@ -67,15 +67,34 @@ jobs:
           methodName: load
           inputs:
             turnFile: ${{ inputs.turnFile }}
-      - name: route
-        description: Ask Jev which route the turn should take. Skipped for an empty turn, and for a turn that looks like it holds a secret (never sent to Jev).
+      - name: recall
+        description: >-
+          Read Jev's earlier route, decision and pick for this exact turn from
+          the route cache (7 days). Never fails; a miss sets every flag false.
         dependsOn:
           - step: load
             condition:
               type: succeeded
         weight: 0
+        allowFailure: false
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: recall
+          inputs:
+            sourceRef: ${{ steps.load.outputs.sourceRef }}
+      - name: route
+        description: Ask Jev which route the turn should take. Skipped for an empty turn, for a turn that looks like it holds a secret (never sent to Jev), and when the route cache already holds the answer.
+        dependsOn:
+          - step: load
+            condition:
+              type: succeeded
+          - step: recall
+            condition:
+              type: succeeded
+        weight: 0
         allowFailure: true
-        guard: ${{ steps.load.outputs.empty || steps.load.outputs.withheld }}
+        guard: ${{ steps.load.outputs.empty || steps.load.outputs.withheld || steps.recall.outputs.hasRoute }}
         task:
           type: model_method
           modelIdOrName: jev
@@ -102,18 +121,27 @@ jobs:
       - name: decide
         description: >-
           Ask Jev the yes/no question in the turn. Skipped unless the route is
-          a decision at or above the cut-off and the turn is complete (nothing
-          pasted, fenced or cut, so the text to judge is all there).
+          a decision at or above the cut-off (fresh or cached) and the turn is
+          complete (nothing pasted, fenced or cut, so the text to judge is all
+          there), and when the route cache already holds the answer.
         dependsOn:
           - step: route
             condition:
               type: always
+          - step: recall
+            condition:
+              type: succeeded
         weight: 0
         allowFailure: true
         guard: >-
-          ${{ !(steps.load.outputs.complete && has(steps.route) &&
-          has(steps.route.outputs) && steps.route.outputs.choice == "decision" &&
-          steps.route.outputs.confidence >= inputs.cutoff) }}
+          ${{ steps.recall.outputs.hasDecision ||
+          !(steps.load.outputs.complete &&
+          ((steps.recall.outputs.hasRoute &&
+          steps.recall.outputs.choice == "decision" &&
+          steps.recall.outputs.confidence >= inputs.cutoff) ||
+          (has(steps.route) && has(steps.route.outputs) &&
+          steps.route.outputs.choice == "decision" &&
+          steps.route.outputs.confidence >= inputs.cutoff))) }}
         task:
           type: model_method
           modelIdOrName: jev
@@ -135,12 +163,18 @@ jobs:
           - step: route
             condition:
               type: always
+          - step: recall
+            condition:
+              type: succeeded
         weight: 0
         allowFailure: true
         guard: >-
-          ${{ !(has(steps.route) && has(steps.route.outputs) &&
+          ${{ !((steps.recall.outputs.hasRoute &&
+          steps.recall.outputs.choice == "deterministic" &&
+          steps.recall.outputs.confidence >= inputs.cutoff) ||
+          (has(steps.route) && has(steps.route.outputs) &&
           steps.route.outputs.choice == "deterministic" &&
-          steps.route.outputs.confidence >= inputs.cutoff) }}
+          steps.route.outputs.confidence >= inputs.cutoff)) }}
         task:
           type: model_method
           modelIdOrName: puddlerouter
@@ -152,15 +186,20 @@ jobs:
       - name: pick
         description: >-
           Ask Jev which extension search found, if any, can answer the turn.
-          Skipped unless match found candidates.
+          Skipped unless match found candidates, and when the route cache
+          already holds the pick.
         dependsOn:
           - step: match
             condition:
               type: always
+          - step: recall
+            condition:
+              type: succeeded
         weight: 0
         allowFailure: true
         guard: >-
-          ${{ !(has(steps.match) && has(steps.match.outputs) &&
+          ${{ steps.recall.outputs.hasPick || !(has(steps.match) &&
+          has(steps.match.outputs) &&
           steps.match.outputs.kind == "candidates") }}
         task:
           type: model_method
@@ -204,14 +243,21 @@ jobs:
           - step: pick
             condition:
               type: always
+          - step: recall
+            condition:
+              type: succeeded
         weight: 0
         allowFailure: true
         guard: >-
           ${{ !(inputs.mode == "live" && has(steps.match) &&
           has(steps.match.outputs) && steps.match.outputs.kind != "recipe" &&
-          !(steps.match.outputs.kind == "candidates" && has(steps.pick) &&
-          has(steps.pick.outputs) && steps.pick.outputs.choice != "none" &&
-          steps.pick.outputs.confidence >= inputs.cutoff)) }}
+          !(steps.match.outputs.kind == "candidates" &&
+          ((steps.recall.outputs.hasPick &&
+          steps.recall.outputs.pickChoice != "none" &&
+          steps.recall.outputs.pickConfidence >= inputs.cutoff) ||
+          (has(steps.pick) && has(steps.pick.outputs) &&
+          steps.pick.outputs.choice != "none" &&
+          steps.pick.outputs.confidence >= inputs.cutoff)))) }}
         task:
           type: model_method
           modelIdOrName: github
@@ -225,6 +271,9 @@ jobs:
         description: Store what the hook should do. Runs whether or not Jev answered.
         dependsOn:
           - step: load
+            condition:
+              type: succeeded
+          - step: recall
             condition:
               type: succeeded
           - step: route
@@ -255,6 +304,7 @@ jobs:
             complete: ${{ steps.load.outputs.complete }}
             hookStartedAt: ${{ inputs.hookStartedAt }}
             sourceRef: ${{ steps.load.outputs.sourceRef }}
+            recalled: ${{ steps.recall.outputs }}
             choice: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.choice : "" }}'
             confidence: "${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.confidence : 0.0 }}"
             yes: "${{ has(steps.decide) && has(steps.decide.outputs) ? steps.decide.outputs.noul : null }}"

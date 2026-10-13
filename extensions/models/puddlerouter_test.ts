@@ -22,7 +22,13 @@ import {
   looksSecret,
   model,
   normalise,
+  recallRoute,
+  resultCacheKey,
+  ROUTE_CACHE_VERSION,
+  routeCacheKey,
   sourceRef,
+  type Store,
+  withRecall,
 } from "./puddlerouter.ts";
 
 const OPEN = '<pasted_content id="abc">';
@@ -256,6 +262,8 @@ function fakeContext(written: Written[], events: string[] = []) {
       events.push(`write ${spec}`);
       return Promise.resolve({ name });
     },
+    readResource: (_name: string): Promise<Record<string, unknown> | null> =>
+      Promise.resolve(null),
     logger: { info: (msg: string) => void events.push(`log ${msg}`) },
   };
 }
@@ -345,7 +353,7 @@ Deno.test("load fails when the turn file is missing", async () => {
   );
 });
 
-Deno.test("reply writes one reply resource", async () => {
+Deno.test("reply writes the reply, and a route cache entry for a routed turn", async () => {
   const written: Written[] = [];
   await model.methods.reply.execute(
     {
@@ -359,8 +367,7 @@ Deno.test("reply writes one reply resource", async () => {
     },
     fakeContext(written),
   );
-  assertEquals(written.length, 1);
-  assertEquals(written[0].spec, "reply");
+  assertEquals(written.map((w) => w.spec), ["reply", "routeCache"]);
   assertEquals(written[0].name, "reply");
   assertEquals(written[0].data.action, "pass");
 });
@@ -393,6 +400,7 @@ Deno.test("reply logs before and after it writes", async () => {
   assertEquals(events, [
     "log Replying for {sourceRef}",
     "write reply",
+    "write routeCache",
     "log Reply {action} for {sourceRef} ({reason})",
   ]);
 });
@@ -799,4 +807,452 @@ Deno.test("match without a puddlerouter.yaml uses the built-in recipes", async (
     fakeContext(written),
   );
   assertEquals(written[0].data.recipeId, "git-status");
+});
+
+// ---- caches ----
+
+/** An in-memory store; `writes` lists every write in order. */
+function fakeStore(seed: Record<string, Record<string, unknown>> = {}) {
+  const data = { ...seed };
+  const writes: Array<{ spec: string; name: string }> = [];
+  const store: Store = {
+    read: (name) => Promise.resolve(data[name] ?? null),
+    write: (spec, name, d) => {
+      data[name] = d;
+      writes.push({ spec, name });
+      return Promise.resolve();
+    },
+  };
+  return { store, data, writes };
+}
+
+const REF = "puddlerouter:0123456789abcdef";
+const T0 = new Date("2026-10-13T10:00:00Z");
+const DAY = 24 * 3600 * 1000;
+const MISS = {
+  hasRoute: false,
+  choice: "",
+  confidence: 0,
+  hasDecision: false,
+  yes: 0,
+  hasPick: false,
+  pickChoice: "",
+  pickConfidence: 0,
+  candidates: [],
+  cachedAt: "",
+};
+
+Deno.test("routeCacheKey carries the version and the sourceRef's hex", () => {
+  assertEquals(
+    routeCacheKey(REF),
+    `route-${ROUTE_CACHE_VERSION}-0123456789abcdef`,
+  );
+});
+
+Deno.test("recallRoute misses on an empty store", async () => {
+  assertEquals(await recallRoute(fakeStore().store, REF, T0), MISS);
+});
+
+Deno.test("recallRoute returns what a fresh entry holds", async () => {
+  const { store } = fakeStore({
+    [routeCacheKey(REF)]: {
+      choice: "deterministic",
+      confidence: 0.9,
+      yes: null,
+      pickChoice: "c1",
+      pickConfidence: 0.85,
+      candidates: [{ name: "@a/b", description: "d" }],
+      cachedAt: new Date(T0.getTime() - 6 * DAY).toISOString(),
+    },
+  });
+  const r = await recallRoute(store, REF, T0);
+  assertEquals(r.hasRoute, true);
+  assertEquals(r.choice, "deterministic");
+  assertEquals(r.hasDecision, false);
+  assertEquals(r.hasPick, true);
+  assertEquals(r.pickChoice, "c1");
+  assertEquals(r.candidates, [{ name: "@a/b", description: "d" }]);
+});
+
+Deno.test("recallRoute ignores an entry older than 7 days", async () => {
+  const { store } = fakeStore({
+    [routeCacheKey(REF)]: {
+      choice: "llm",
+      confidence: 0.9,
+      yes: null,
+      pickChoice: "",
+      pickConfidence: 0,
+      candidates: [],
+      cachedAt: new Date(T0.getTime() - 8 * DAY).toISOString(),
+    },
+  });
+  assertEquals(await recallRoute(store, REF, T0), MISS);
+});
+
+Deno.test("recallRoute misses on a read error or a malformed entry", async () => {
+  const broken: Store = {
+    read: () => Promise.reject(new Error("boom")),
+    write: () => Promise.resolve(),
+  };
+  assertEquals(await recallRoute(broken, REF, T0), MISS);
+  const { store } = fakeStore({ [routeCacheKey(REF)]: { choice: 5 } });
+  assertEquals(await recallRoute(store, REF, T0), MISS);
+});
+
+const REPLY_BASE = { mode: "shadow" as const, sourceRef: REF, cutoff: 0.7 };
+
+Deno.test("withRecall fills a skipped route from the cache", () => {
+  const out = withRecall(
+    { ...REPLY_BASE, choice: "", confidence: 0 },
+    { ...MISS, hasRoute: true, choice: "decision", confidence: 0.95 },
+  );
+  assertEquals(out.args.choice, "decision");
+  assertEquals(out.args.confidence, 0.95);
+  assertEquals(out.cached, true);
+});
+
+Deno.test("withRecall fills yes and the pick, with the cached candidates", () => {
+  const out = withRecall(
+    { ...REPLY_BASE, choice: "deterministic", confidence: 0.9, yes: null },
+    {
+      ...MISS,
+      hasDecision: true,
+      yes: 0.97,
+      hasPick: true,
+      pickChoice: "c1",
+      pickConfidence: 0.9,
+      candidates: [{ name: "@a/b", description: "d" }],
+    },
+  );
+  assertEquals(out.args.yes, 0.97);
+  assertEquals(out.args.pickChoice, "c1");
+  assertEquals(out.args.candidates, [{ name: "@a/b", description: "d" }]);
+  assertEquals(out.cached, true);
+});
+
+Deno.test("withRecall keeps fresh answers and reports no hit", () => {
+  const out = withRecall(
+    {
+      ...REPLY_BASE,
+      choice: "llm",
+      confidence: 0.8,
+      yes: 0.2,
+      pickChoice: "none",
+      pickConfidence: 0.9,
+      candidates: [{ name: "@x/y", description: "" }],
+    },
+    {
+      ...MISS,
+      hasRoute: true,
+      choice: "decision",
+      confidence: 0.99,
+      hasDecision: true,
+      yes: 0.9,
+      hasPick: true,
+      pickChoice: "c1",
+    },
+  );
+  assertEquals(out.args.choice, "llm");
+  assertEquals(out.args.confidence, 0.8);
+  assertEquals(out.args.yes, 0.2);
+  assertEquals(out.args.pickChoice, "none");
+  assertEquals(out.args.candidates, [{ name: "@x/y", description: "" }]);
+  assertEquals(out.cached, false);
+});
+
+Deno.test("withRecall with a miss changes nothing", () => {
+  const out = withRecall({ ...REPLY_BASE, choice: "" }, MISS);
+  assertEquals(out.cached, false);
+  assertEquals(out.args.choice, "");
+});
+
+Deno.test("recall reads the cache and always writes fixed-shape fields", async () => {
+  const written: Written[] = [];
+  await model.methods.recall.execute(
+    { sourceRef: REF },
+    fakeContext(written),
+  );
+  assertEquals(written.length, 1);
+  assertEquals(written[0].spec, "recall");
+  assertEquals(written[0].data.hasRoute, false);
+  assertEquals(written[0].data.candidates, []);
+});
+
+Deno.test("reply stores the merged answers in the route cache and says cached", async () => {
+  const written: Written[] = [];
+  const ctx = fakeContext(written);
+  await model.methods.reply.execute(
+    { sourceRef: REF, choice: "llm", confidence: 0.9 } as never,
+    ctx,
+  );
+  const cache = written.find((w) => w.spec === "routeCache");
+  assertEquals(cache?.name, routeCacheKey(REF));
+  assertEquals(cache?.data.choice, "llm");
+  assertEquals(written.find((w) => w.spec === "reply")?.data.cached, false);
+});
+
+Deno.test("reply from a full cache hit writes no cache entry and says cached", async () => {
+  const written: Written[] = [];
+  const ctx = fakeContext(written);
+  await model.methods.reply.execute(
+    {
+      sourceRef: REF,
+      choice: "",
+      recalled: { ...MISS, hasRoute: true, choice: "llm", confidence: 0.9 },
+    } as never,
+    ctx,
+  );
+  assertEquals(written.some((w) => w.spec === "routeCache"), false);
+  const reply = written.find((w) => w.spec === "reply")!;
+  assertEquals(reply.data.cached, true);
+  assertEquals(reply.data.choice, "llm");
+});
+
+Deno.test("reply does not cache a turn Jev gave no route for", async () => {
+  const written: Written[] = [];
+  const ctx = fakeContext(written);
+  await model.methods.reply.execute(
+    { sourceRef: REF, choice: "" } as never,
+    ctx,
+  );
+  assertEquals(written.some((w) => w.spec === "routeCache"), false);
+});
+
+// search cache
+
+const SEARCH = {
+  "model type search": JSON.stringify({ results: [{ raw: "@acme/local" }] }),
+  "extension search": JSON.stringify({
+    extensions: [{ name: "@swamp/reg", description: "r" }],
+  }),
+};
+
+Deno.test("findMatch serves a repeated search from the cache", async () => {
+  const { store, writes } = fakeStore();
+  const first = fakeExec(SEARCH);
+  const a = await findMatch(
+    "list the hetzner servers",
+    first.exec,
+    T0,
+    REF,
+    parseConfig("allow: ['@acme/*']"),
+    store,
+  );
+  assertEquals(first.calls.length, 2);
+  assertEquals(writes.length, 1);
+  assertEquals(writes[0].spec, "searchCache");
+  const second = fakeExec({});
+  const b = await findMatch(
+    "list the hetzner servers",
+    second.exec,
+    new Date(T0.getTime() + 3600_000),
+    REF,
+    parseConfig("allow: ['@acme/*']"),
+    store,
+  );
+  assertEquals(second.calls.length, 0);
+  assertEquals(b.candidates, a.candidates);
+});
+
+Deno.test("findMatch searches again once the cached search is a day old", async () => {
+  const { store } = fakeStore();
+  await findMatch(
+    "list the hetzner servers",
+    fakeExec(SEARCH).exec,
+    T0,
+    REF,
+    undefined,
+    store,
+  );
+  const later = fakeExec(SEARCH);
+  await findMatch(
+    "list the hetzner servers",
+    later.exec,
+    new Date(T0.getTime() + DAY + 1000),
+    REF,
+    undefined,
+    store,
+  );
+  assertEquals(later.calls.length, 2);
+});
+
+Deno.test("findMatch does not cache when a search failed", async () => {
+  const { store, writes } = fakeStore();
+  await findMatch(
+    "list the hetzner servers",
+    fakeExec({ "extension search": SEARCH["extension search"] }).exec,
+    T0,
+    REF,
+    undefined,
+    store,
+  );
+  assertEquals(writes.length, 0);
+});
+
+Deno.test("findMatch applies the allowlist after the cache", async () => {
+  const { store } = fakeStore();
+  const open = parseConfig("allow: ['@acme/*']");
+  await findMatch(
+    "list the hetzner servers",
+    fakeExec(SEARCH).exec,
+    T0,
+    REF,
+    open,
+    store,
+  );
+  const strict = await findMatch(
+    "list the hetzner servers",
+    fakeExec({}).exec,
+    T0,
+    REF,
+    parseConfig(""),
+    store,
+  );
+  assertEquals(
+    strict.candidates.map((c) => c.name).includes("@acme/local"),
+    false,
+  );
+});
+
+Deno.test("match passes a resource-backed cache to findMatch", async () => {
+  const written: Written[] = [];
+  await model.methods.match.execute(
+    { text: "git status", repoDir: "/nonexistent" },
+    fakeContext(written),
+  );
+  assertEquals(written.length, 1);
+});
+
+// result cache
+
+const CACHED_RECIPE = parseConfig(`
+recipes:
+  - id: gh-open-prs
+    extension: '@webframp/github'
+    method: list_prs
+    definition: github
+    dataName: prs
+    pattern: '^list the open prs in ([\\w.-]+/[\\w.-]+)$'
+    inputs: { repo: { capture: 1, as: repo } }
+    cacheFor: 5m
+    template: "ok"
+`);
+
+Deno.test("cacheFor is parsed to milliseconds; a bad value drops the recipe", () => {
+  assertEquals(CACHED_RECIPE.errors, []);
+  assertEquals(CACHED_RECIPE.recipes[0].cacheFor, 300_000);
+  const bad = parseConfig(`
+recipes:
+  - id: x
+    extension: '@webframp/github'
+    method: m
+    definition: d
+    dataName: n
+    pattern: '^x$'
+    cacheFor: forever
+    template: t
+`);
+  assertEquals(bad.recipes.length, 0);
+  assertEquals(bad.errors.length, 1);
+});
+
+Deno.test("no built-in recipe is cached", async () => {
+  const { RECIPES } = await import("./_lib/recipes.ts");
+  assertEquals(RECIPES.filter((r) => r.cacheFor !== undefined), []);
+});
+
+Deno.test("executeRecipe without cacheFor never touches the store", async () => {
+  const { store, writes } = fakeStore();
+  await executeRecipe(
+    "nope",
+    [],
+    fakeExec({}).exec,
+    "/repo",
+    undefined,
+    store,
+    T0,
+  );
+  assertEquals(writes.length, 0);
+});
+
+Deno.test("executeRecipe with cacheFor stores a success and serves the repeat", async () => {
+  const { store, writes } = fakeStore();
+  const exec = fakeExec({
+    "behavior run": JSON.stringify({
+      dataArtifacts: [{ name: "prs", attributes: {} }],
+    }),
+  });
+  const first = await executeRecipe(
+    "gh-open-prs",
+    ["a/b"],
+    exec.exec,
+    "/repo",
+    CACHED_RECIPE,
+    store,
+    T0,
+  );
+  assertEquals(first.ok, true);
+  assertEquals(first.cached ?? false, false);
+  assertEquals(writes.map((w) => w.spec), ["resultCache"]);
+  const second = await executeRecipe(
+    "gh-open-prs",
+    ["a/b"],
+    exec.exec,
+    "/repo",
+    CACHED_RECIPE,
+    store,
+    new Date(T0.getTime() + 60_000),
+  );
+  assertEquals(exec.calls.length, 1);
+  assertEquals(second, { ok: true, text: "ok", error: "", cached: true });
+});
+
+Deno.test("executeRecipe does not cache a failed run", async () => {
+  const { store, writes } = fakeStore();
+  const r = await executeRecipe(
+    "gh-open-prs",
+    ["a/b"],
+    fakeExec({}).exec,
+    "/repo",
+    CACHED_RECIPE,
+    store,
+    T0,
+  );
+  assertEquals(r.ok, false);
+  assertEquals(writes.length, 0);
+});
+
+Deno.test("executeRecipe serves a cached result and expires it after cacheFor", async () => {
+  const k = await resultCacheKey("gh-open-prs", ["a/b"]);
+  const { store } = fakeStore({
+    [k]: { text: "cached answer", cachedAt: T0.toISOString() },
+  });
+  const calls = fakeExec({});
+  const fresh = await executeRecipe(
+    "gh-open-prs",
+    ["a/b"],
+    calls.exec,
+    "/repo",
+    CACHED_RECIPE,
+    store,
+    new Date(T0.getTime() + 60_000),
+  );
+  assertEquals(fresh, {
+    ok: true,
+    text: "cached answer",
+    error: "",
+    cached: true,
+  });
+  assertEquals(calls.calls.length, 0);
+  const stale = await executeRecipe(
+    "gh-open-prs",
+    ["a/b"],
+    calls.exec,
+    "/repo",
+    CACHED_RECIPE,
+    store,
+    new Date(T0.getTime() + 6 * 60_000),
+  );
+  assertEquals(stale.cached ?? false, false);
+  assert(calls.calls.length > 0);
 });

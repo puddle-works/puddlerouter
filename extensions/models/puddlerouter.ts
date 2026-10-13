@@ -100,6 +100,61 @@ export const ExecuteArgsSchema = z.object({
 /** The arguments `execute` accepts. */
 export type ExecuteArgs = z.infer<typeof ExecuteArgsSchema>;
 
+const CandidatesSchema = z.array(
+  z.object({ name: z.string(), description: z.string() }),
+);
+
+/**
+ * What `recall` stores: Jev's earlier answers for this turn. Every field is
+ * always present so the workflow's CEL needs no `has()` checks on it.
+ */
+export const RecallSchema = z.object({
+  hasRoute: z.boolean(),
+  choice: z.string(),
+  confidence: z.number(),
+  hasDecision: z.boolean(),
+  yes: z.number(),
+  hasPick: z.boolean(),
+  pickChoice: z.string(),
+  pickConfidence: z.number(),
+  candidates: CandidatesSchema,
+  cachedAt: z.string(),
+});
+/** The recalled answers. */
+export type Recall = z.infer<typeof RecallSchema>;
+
+/** What `reply` stores in the route cache, keyed by the turn. */
+export const RouteCacheSchema = z.object({
+  choice: z.string(),
+  confidence: z.number(),
+  yes: z.number().nullable(),
+  pickChoice: z.string(),
+  pickConfidence: z.number(),
+  candidates: CandidatesSchema,
+  cachedAt: z.iso.datetime(),
+});
+/** One route cache entry. */
+export type RouteCache = z.infer<typeof RouteCacheSchema>;
+
+/** The searched extensions `match` keeps for a day. */
+export const SearchCacheSchema = z.object({
+  found: CandidatesSchema,
+  cachedAt: z.iso.datetime(),
+});
+
+/** A successful recipe answer kept for the recipe's `cacheFor`. */
+export const ResultCacheSchema = z.object({
+  text: z.string(),
+  cachedAt: z.iso.datetime(),
+});
+
+/** Arguments for `recall`. */
+export const RecallArgsSchema = z.object({
+  sourceRef: z.string().describe("The turn's sourceRef; the route cache key."),
+});
+/** The arguments `recall` accepts. */
+export type RecallArgs = z.infer<typeof RecallArgsSchema>;
+
 /** Arguments for `reply`. */
 export const ReplyArgsSchema = z.object({
   mode: z.enum(["shadow", "live"]).default("shadow").describe(
@@ -140,6 +195,9 @@ export const ReplyArgsSchema = z.object({
   issueUrl: z.string().optional().describe(
     "The issue raised for a turn nothing could answer; empty if none was.",
   ),
+  recalled: RecallSchema.optional().describe(
+    "The `recall` step's answers; used where a Jev step was skipped.",
+  ),
 });
 /** The arguments `reply` accepts. */
 export type ReplyArgs = z.infer<typeof ReplyArgsSchema>;
@@ -170,6 +228,8 @@ export const ReplySchema = z.object({
   extension: z.string(),
   /** The issue raised when nothing could answer the turn; empty if none. */
   issue: z.string(),
+  /** True when a Jev answer (route, decision or pick) came from the cache. */
+  cached: z.boolean(),
   sourceRef: z.string(),
   /** Why the action was chosen. */
   reason: z.string(),
@@ -183,6 +243,129 @@ export type Reply = z.infer<typeof ReplySchema>;
 /** Lowercase, trim and collapse whitespace, so trivial edits hash the same. */
 export function normalise(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Part of every route cache key. Bump it when the route, decide or pick
+ * question changes (here and in the eval workflows), so old answers are not
+ * reused for a different question.
+ */
+export const ROUTE_CACHE_VERSION = "v1";
+const DAY_MS = 24 * 3600 * 1000;
+const ROUTE_TTL_MS = 7 * DAY_MS;
+const SEARCH_TTL_MS = DAY_MS;
+
+/** Where cache entries live: this model's own swamp resources. */
+export interface Store {
+  read(name: string): Promise<Record<string, unknown> | null>;
+  write(
+    spec: string,
+    name: string,
+    data: Record<string, unknown>,
+  ): Promise<void>;
+}
+
+async function hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function fresh(cachedAt: unknown, ttlMs: number, now: Date): boolean {
+  const at = typeof cachedAt === "string" ? Date.parse(cachedAt) : NaN;
+  return !Number.isNaN(at) && now.getTime() - at < ttlMs;
+}
+
+/** The route cache instance name for a turn's sourceRef. */
+export function routeCacheKey(sourceRef: string): string {
+  return `route-${ROUTE_CACHE_VERSION}-${sourceRef.replace(/^[^:]*:/, "")}`;
+}
+
+/** Jev's earlier answers for this turn; all `has*` false on any miss. */
+export async function recallRoute(
+  store: Store,
+  sourceRef: string,
+  now: Date = new Date(),
+): Promise<Recall> {
+  const miss: Recall = {
+    hasRoute: false,
+    choice: "",
+    confidence: 0,
+    hasDecision: false,
+    yes: 0,
+    hasPick: false,
+    pickChoice: "",
+    pickConfidence: 0,
+    candidates: [],
+    cachedAt: "",
+  };
+  try {
+    const entry = RouteCacheSchema.safeParse(
+      await store.read(routeCacheKey(sourceRef)),
+    );
+    if (!entry.success || !fresh(entry.data.cachedAt, ROUTE_TTL_MS, now)) {
+      return miss;
+    }
+    const e = entry.data;
+    return {
+      hasRoute: e.choice !== "",
+      choice: e.choice,
+      confidence: e.confidence,
+      hasDecision: e.yes !== null,
+      yes: e.yes ?? 0,
+      hasPick: e.pickChoice !== "",
+      pickChoice: e.pickChoice,
+      pickConfidence: e.pickConfidence,
+      candidates: e.candidates,
+      cachedAt: e.cachedAt,
+    };
+  } catch {
+    return miss;
+  }
+}
+
+/** The answers of the Jev steps, which `recall` can fill in. */
+type Recallable = Pick<
+  ReplyArgs,
+  | "choice"
+  | "confidence"
+  | "yes"
+  | "pickChoice"
+  | "pickConfidence"
+  | "candidates"
+>;
+
+/**
+ * Fill the answers a skipped Jev step left empty from the recalled ones. A
+ * fresh answer always wins. `cached` says whether any value came from the cache.
+ */
+export function withRecall<T extends Recallable>(
+  args: T,
+  recalled: Recall | undefined,
+): { args: T & Recallable; cached: boolean } {
+  if (!recalled) return { args, cached: false };
+  const out = { ...args };
+  let cached = false;
+  if (!args.choice && recalled.hasRoute) {
+    out.choice = recalled.choice;
+    out.confidence = recalled.confidence;
+    cached = true;
+  }
+  if ((args.yes === undefined || args.yes === null) && recalled.hasDecision) {
+    out.yes = recalled.yes;
+    cached = true;
+  }
+  if (!args.pickChoice && recalled.hasPick) {
+    out.pickChoice = recalled.pickChoice;
+    out.pickConfidence = recalled.pickConfidence;
+    out.candidates = recalled.candidates;
+    cached = true;
+  }
+  return { args: out, cached };
 }
 
 const PASTED =
@@ -330,6 +513,8 @@ export const ResultSchema = z.object({
   ok: z.boolean(),
   text: z.string(),
   error: z.string(),
+  /** True when the answer came from the result cache. */
+  cached: z.boolean(),
   ranAt: z.iso.datetime(),
 });
 /** The stored result. */
@@ -389,6 +574,57 @@ async function searchJson(exec: Exec, args: string[]): Promise<unknown> {
 }
 
 /**
+ * Extensions swamp finds for the query, before the allowlist. A search from
+ * the last day is reused; a failed search is never stored.
+ */
+async function searchExtensions(
+  query: string,
+  exec: Exec,
+  now: Date,
+  store?: Store,
+): Promise<Match["candidates"]> {
+  const key = `search-${(await hex(query)).slice(0, 32)}`;
+  try {
+    const entry = SearchCacheSchema.safeParse(await store?.read(key));
+    if (entry.success && fresh(entry.data.cachedAt, SEARCH_TTL_MS, now)) {
+      return entry.data.found;
+    }
+  } catch { /* read failed: search instead */ }
+  const [local, registry] = await Promise.all([
+    searchJson(exec, ["model", "type", "search", query, "--json"]),
+    searchJson(exec, ["extension", "search", query, "--json"]),
+  ]);
+  const found = new Map<string, string>();
+  const rows = (registry as { extensions?: unknown } | null)?.extensions;
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      if (typeof r?.name === "string") {
+        found.set(
+          r.name,
+          typeof r.description === "string" ? r.description : "",
+        );
+      }
+    }
+  }
+  const types = (local as { results?: unknown } | null)?.results;
+  if (Array.isArray(types)) {
+    for (const t of types) {
+      if (typeof t?.raw === "string" && !found.has(t.raw)) found.set(t.raw, "");
+    }
+  }
+  const list = [...found].map(([name, description]) => ({ name, description }));
+  if (store && local !== null && registry !== null) {
+    try {
+      await store.write("searchCache", key, {
+        found: list,
+        cachedAt: now.toISOString(),
+      });
+    } catch { /* not cached: the next turn searches again */ }
+  }
+  return list;
+}
+
+/**
  * Find how to answer a deterministic turn: a built-in recipe, else the
  * extensions swamp finds for its content words. Search failing is not an error.
  */
@@ -398,6 +634,7 @@ export async function findMatch(
   now: Date = new Date(),
   sourceRef = "",
   config: Pick<Config, "allowlist" | "recipes"> = parseConfig(""),
+  store?: Store,
 ): Promise<Match> {
   const allow = allowPredicate(config.allowlist);
   const draft = (query: string, candidates: Match["candidates"]) => {
@@ -431,34 +668,11 @@ export async function findMatch(
       ...draft("", []),
     };
   }
-  const [local, registry] = await Promise.all([
-    searchJson(exec, ["model", "type", "search", query, "--json"]),
-    searchJson(exec, ["extension", "search", query, "--json"]),
-  ]);
-  const found = new Map<string, string>();
-  const rows = (registry as { extensions?: unknown } | null)?.extensions;
-  if (Array.isArray(rows)) {
-    for (const r of rows) {
-      if (typeof r?.name === "string") {
-        found.set(
-          r.name,
-          typeof r.description === "string" ? r.description : "",
-        );
-      }
-    }
-  }
-  const types = (local as { results?: unknown } | null)?.results;
-  if (Array.isArray(types)) {
-    for (const t of types) {
-      if (typeof t?.raw === "string" && !found.has(t.raw)) found.set(t.raw, "");
-    }
-  }
-  const candidates = [...found].filter(([name]) => allow(name)).slice(
+  const found = await searchExtensions(query, exec, now, store);
+  const candidates = found.filter(({ name }) => allow(name)).slice(
     0,
     MAX_CANDIDATES,
-  ).map((
-    [name, description],
-  ) => ({ name, description }));
+  );
   return {
     ...base,
     kind: candidates.length ? "candidates" : "none",
@@ -469,24 +683,59 @@ export async function findMatch(
   };
 }
 
-/** Run the recipe with this id; an unknown id is a failed result. */
+/** The result cache instance name for a recipe and its captures. */
+export async function resultCacheKey(
+  recipeId: string,
+  captures: string[],
+): Promise<string> {
+  return `result-${
+    (await hex([recipeId, ...captures].join("\0"))).slice(0, 32)
+  }`;
+}
+
+/**
+ * Run the recipe with this id; an unknown id is a failed result. A recipe with
+ * `cacheFor` reuses its last successful answer for that long.
+ */
 export async function executeRecipe(
   recipeId: string,
   captures: string[],
   exec: Exec,
   repoDir: string,
   config: Pick<Config, "allowlist" | "recipes"> = parseConfig(""),
-): Promise<{ ok: boolean; text: string; error: string }> {
+  store?: Store,
+  now: Date = new Date(),
+): Promise<{ ok: boolean; text: string; error: string; cached?: boolean }> {
   const recipe = [...config.recipes, ...RECIPES].find((r) => r.id === recipeId);
   if (!recipe) {
     return { ok: false, text: "", error: `unknown recipe ${recipeId}` };
   }
-  return await runRecipe(
+  const key = store && recipe.cacheFor !== undefined
+    ? await resultCacheKey(recipeId, captures)
+    : "";
+  if (store && key) {
+    try {
+      const entry = ResultCacheSchema.safeParse(await store.read(key));
+      if (entry.success && fresh(entry.data.cachedAt, recipe.cacheFor!, now)) {
+        return { ok: true, text: entry.data.text, error: "", cached: true };
+      }
+    } catch { /* read failed: run it */ }
+  }
+  const result = await runRecipe(
     { recipe, captures },
     exec,
     repoDir,
     allowPredicate(config.allowlist),
   );
+  if (store && key && result.ok) {
+    try {
+      await store.write("resultCache", key, {
+        text: result.text,
+        cachedAt: now.toISOString(),
+      });
+    } catch { /* not cached: the next turn runs it again */ }
+  }
+  return result;
 }
 
 /**
@@ -540,6 +789,7 @@ export type BuildReplyArgs =
     cutoff: number;
     complete?: boolean;
     answerCutoff?: number;
+    cached?: boolean;
   };
 
 /**
@@ -617,6 +867,7 @@ export function buildReply(
     recipe,
     extension,
     issue,
+    cached: args.cached ?? false,
     sourceRef: args.sourceRef,
     reason: shadow ? `shadow: ${reason}` : reason,
     elapsedMs: args.hookStartedAt ? now.getTime() - args.hookStartedAt : null,
@@ -631,13 +882,24 @@ interface MethodContext {
     name: string,
     data: Record<string, unknown>,
   ) => Promise<{ name: string }>;
+  readResource: (name: string) => Promise<Record<string, unknown> | null>;
   logger: { info: (msg: string, props: Record<string, unknown>) => void };
+}
+
+/** A store over the method's own swamp resources. */
+function resourceStore(context: MethodContext): Store {
+  return {
+    read: (name) => context.readResource(name),
+    write: async (spec, name, data) => {
+      await context.writeResource(spec, name, data);
+    },
+  };
 }
 
 /** The model type: `load`, `match`, `execute` and `reply`, one resource each. */
 export const model = {
   type: "@puddleworks/puddlerouter",
-  version: "2026.10.13.1",
+  version: "2026.10.13.2",
   globalArguments: GlobalArgsSchema,
   resources: {
     turn: {
@@ -665,6 +927,30 @@ export const model = {
       lifetime: "14d" as const,
       garbageCollection: 2000,
     },
+    recall: {
+      description: "Jev's earlier answers for the turn, from the route cache.",
+      schema: RecallSchema,
+      lifetime: "14d" as const,
+      garbageCollection: 2000,
+    },
+    routeCache: {
+      description: "Jev's route, decision and pick for a turn, kept 7 days.",
+      schema: RouteCacheSchema,
+      lifetime: "7d" as const,
+      garbageCollection: 1,
+    },
+    searchCache: {
+      description: "Extensions a search found, kept 1 day.",
+      schema: SearchCacheSchema,
+      lifetime: "1d" as const,
+      garbageCollection: 1,
+    },
+    resultCache: {
+      description: "A recipe's answer, kept for the recipe's cacheFor.",
+      schema: ResultCacheSchema,
+      lifetime: "1d" as const,
+      garbageCollection: 1,
+    },
   },
   methods: {
     match: {
@@ -685,6 +971,7 @@ export const model = {
           new Date(),
           args.sourceRef,
           config,
+          resourceStore(context),
         );
         const handle = await context.writeResource("match", "match", match);
         context.logger.info("Matched {kind} {recipeId}", {
@@ -707,10 +994,12 @@ export const model = {
           swampExec,
           args.repoDir,
           await loadConfig(args.repoDir),
+          resourceStore(context),
         );
         const handle = await context.writeResource("result", "result", {
           recipeId: args.recipeId,
           ...r,
+          cached: r.cached ?? false,
           ranAt: new Date().toISOString(),
         });
         context.logger.info("Recipe {recipeId} ok {ok}", {
@@ -734,6 +1023,27 @@ export const model = {
         return { dataHandles: [handle] };
       },
     },
+    recall: {
+      description:
+        "Read Jev's earlier answers for the turn from the route cache; store `recall`.",
+      arguments: RecallArgsSchema,
+      execute: async (args: RecallArgs, context: MethodContext) => {
+        const recalled = await recallRoute(
+          resourceStore(context),
+          args.sourceRef,
+        );
+        const handle = await context.writeResource(
+          "recall",
+          "recall",
+          recalled,
+        );
+        context.logger.info("Recalled route {hasRoute} for {sourceRef}", {
+          hasRoute: recalled.hasRoute,
+          sourceRef: args.sourceRef,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
     reply: {
       description: "Turn the route into a reply for the hook; store `reply`.",
       arguments: ReplyArgsSchema,
@@ -741,18 +1051,44 @@ export const model = {
         context.logger.info("Replying for {sourceRef}", {
           sourceRef: args.sourceRef,
         });
+        const { recalled, ...fresh } = args;
+        const merged = withRecall(fresh, recalled);
         const reply = buildReply({
-          ...args,
+          ...merged.args,
           mode: args.mode ?? "shadow",
           cutoff: args.cutoff ?? 0.7,
+          cached: merged.cached,
         });
-        const handle = await context.writeResource("reply", "reply", reply);
+        const handles = [
+          await context.writeResource("reply", "reply", reply),
+        ];
+        const m = merged.args;
+        const somethingNew = Boolean(fresh.choice) || fresh.yes != null ||
+          Boolean(fresh.pickChoice);
+        if (m.choice && somethingNew) {
+          const entry: RouteCache = {
+            choice: m.choice,
+            confidence: m.confidence ?? 0,
+            yes: m.yes ?? null,
+            pickChoice: m.pickChoice ?? "",
+            pickConfidence: m.pickConfidence ?? 0,
+            candidates: m.pickChoice ? m.candidates ?? [] : [],
+            cachedAt: new Date().toISOString(),
+          };
+          handles.push(
+            await context.writeResource(
+              "routeCache",
+              routeCacheKey(args.sourceRef),
+              entry,
+            ),
+          );
+        }
         context.logger.info("Reply {action} for {sourceRef} ({reason})", {
           action: reply.action,
           sourceRef: reply.sourceRef,
           reason: reply.reason,
         });
-        return { dataHandles: [handle] };
+        return { dataHandles: handles };
       },
     },
   },
