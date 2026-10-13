@@ -6,7 +6,7 @@
     {
       "id": "credentials-secrets",
       "verdict": "pass",
-      "note": "The model holds no credentials. The Jev key is read by @swamp/typesafe-ai from the vault. load withholds any turn that looks like it holds a secret (token, key, password, email, long hex): stored text is a placeholder and the Jev steps are skipped (tested)."
+      "note": "The model holds no credentials. The Jev key is read by @swamp/typesafe-ai from the vault. load withholds any turn that looks like it holds a secret (token, key, password, email, long hex): stored text is a placeholder and the Jev steps are skipped (tested). match and execute run only `swamp` on the PATH with fixed arguments: the recipe's regex captures digits only and they go in with --literal-inputs, so turn text is never a swamp input; only @swamp/* and @mesgme/* extensions are pulled or run, and only read-only recipes."
     },
     {
       "id": "logging-quality",
@@ -16,7 +16,7 @@
     {
       "id": "error-handling",
       "verdict": "pass",
-      "note": "load throws on an unreadable turn file before writing (tested). reply inputs are validated by zod; a missing route answer, a missing or failed decide answer, an unsure answer and an incomplete turn are each recorded with a reason and pass, so the workflow fails open (each tested)."
+      "note": "load throws on an unreadable turn file before writing (tested). reply inputs are validated by zod; a missing route answer, a missing or failed decide answer, an unsure answer and an incomplete turn are each recorded with a reason and pass, so the workflow fails open (each tested). match fails open: a failed or unparseable search gives kind none; execute turns an unknown recipe, a failed pull or run, bad JSON and missing data into ok=false with a reason, and reply passes (each tested)."
     },
     {
       "id": "testing-completeness",

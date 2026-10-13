@@ -61,7 +61,7 @@ printf '%s' "$prompt" > "$turn" || { rm -f "$turn"; exit 0; }
 
 run_args=(workflow run @puddleworks/puddlerouter --repo-dir "$REPO"
   --input "turnFile=$turn" --input "mode=$MODE"
-  --input "hookStartedAt=$started")
+  --input "hookStartedAt=$started" --input "repoDir=$REPO")
 
 if [ "$MODE" = shadow ]; then
   (

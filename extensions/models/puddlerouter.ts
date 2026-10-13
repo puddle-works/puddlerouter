@@ -16,6 +16,14 @@
  * @module
  */
 import { z } from "npm:zod@4";
+import {
+  type Exec,
+  isAllowed,
+  matchRecipe,
+  RECIPES,
+  runRecipe,
+  searchQuery,
+} from "./_lib/recipes.ts";
 
 /** Jev's answer to a decision: unsure when it is not past the cut-off. */
 export const ANSWERS = ["yes", "no", "unsure"] as const;
@@ -67,6 +75,24 @@ export const TurnSchema = z.object({
 /** The stored turn. */
 export type Turn = z.infer<typeof TurnSchema>;
 
+/** Arguments for `match`. */
+export const MatchArgsSchema = z.object({
+  text: z.string().describe("The cleaned turn text."),
+});
+/** The arguments `match` accepts. */
+export type MatchArgs = z.infer<typeof MatchArgsSchema>;
+
+/** Arguments for `execute`. */
+export const ExecuteArgsSchema = z.object({
+  recipeId: z.string().min(1),
+  captures: z.array(z.string()).default([]),
+  repoDir: z.string().min(1).default(".").describe(
+    "The swamp repo the recipe's extension is pulled into.",
+  ),
+});
+/** The arguments `execute` accepts. */
+export type ExecuteArgs = z.infer<typeof ExecuteArgsSchema>;
+
 /** Arguments for `reply`. */
 export const ReplyArgsSchema = z.object({
   mode: z.enum(["shadow", "live"]).default("shadow").describe(
@@ -92,6 +118,18 @@ export const ReplyArgsSchema = z.object({
   answerCutoff: z.number().min(0.5).max(1).default(0.8).describe(
     "A yes needs `yes` at or above this, a no at or below 1 minus this.",
   ),
+  matchKind: z.enum(["recipe", "candidates", "none"]).optional().describe(
+    "The `match` step's kind; missing if it did not run.",
+  ),
+  recipeId: z.string().optional().describe("The matched recipe's id."),
+  resultOk: z.boolean().optional().describe("True if the recipe ran."),
+  resultText: z.string().optional().describe("The recipe's answer."),
+  candidates: z.array(z.object({ name: z.string(), description: z.string() }))
+    .optional().describe("Extensions found by search, in c1, c2, c3 order."),
+  pickChoice: z.string().optional().describe("Jev's pick: c1, c2, c3 or none."),
+  pickConfidence: z.number().optional().describe(
+    "Jev's confidence in the pick.",
+  ),
 });
 /** The arguments `reply` accepts. */
 export type ReplyArgs = z.infer<typeof ReplyArgsSchema>;
@@ -116,6 +154,10 @@ export const ReplySchema = z.object({
   /** Jev's probability of yes; null if it was not asked. */
   yes: z.number().nullable(),
   answerCutoff: z.number(),
+  /** The recipe that answered on the deterministic route; empty if none. */
+  recipe: z.string(),
+  /** The extension hinted at on the deterministic route; empty if none. */
+  extension: z.string(),
   sourceRef: z.string(),
   /** Why the action was chosen. */
   reason: z.string(),
@@ -244,6 +286,175 @@ export function decisionText(answer: "yes" | "no", yes: number): string {
     "send the prompt again starting with llm:";
 }
 
+/** Extensions the deterministic route offers Jev to pick from. */
+const MAX_CANDIDATES = 3;
+const NO_CANDIDATE = "No such candidate.";
+
+/** What `match` stores. */
+export const MatchSchema = z.object({
+  /** recipe: a built-in recipe fits; candidates: search found extensions. */
+  kind: z.enum(["recipe", "candidates", "none"]),
+  recipeId: z.string(),
+  /** Digits the recipe's pattern captured. */
+  captures: z.array(z.string()),
+  /** The words searched for; empty for a recipe. */
+  query: z.string(),
+  candidates: z.array(z.object({ name: z.string(), description: z.string() })),
+  /** Criteria for Jev's pick: c1..c3 and none. */
+  criteria: z.record(z.string(), z.string()),
+  matchedAt: z.iso.datetime(),
+});
+/** The stored match. */
+export type Match = z.infer<typeof MatchSchema>;
+
+/** What `execute` stores. */
+export const ResultSchema = z.object({
+  recipeId: z.string(),
+  ok: z.boolean(),
+  text: z.string(),
+  error: z.string(),
+  ranAt: z.iso.datetime(),
+});
+/** The stored result. */
+export type RecipeOutcome = z.infer<typeof ResultSchema>;
+
+function criteriaFor(candidates: Match["candidates"]): Record<string, string> {
+  const criteria: Record<string, string> = {};
+  for (let i = 0; i < MAX_CANDIDATES; i++) {
+    const c = candidates[i];
+    criteria[`c${i + 1}`] = c
+      ? `${c.name}: ${c.description || "no description"}`
+      : NO_CANDIDATE;
+  }
+  criteria.none =
+    "None of these can answer it, or it needs judgement or data not held anywhere.";
+  return criteria;
+}
+
+async function searchJson(exec: Exec, args: string[]): Promise<unknown> {
+  try {
+    const res = await exec(args);
+    return res.code === 0 ? JSON.parse(res.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find how to answer a deterministic turn: a built-in recipe, else the
+ * extensions swamp finds for its content words. Search failing is not an error.
+ */
+export async function findMatch(
+  text: string,
+  exec: Exec,
+  now: Date = new Date(),
+): Promise<Match> {
+  const base = {
+    recipeId: "",
+    captures: [] as string[],
+    query: "",
+    candidates: [] as Match["candidates"],
+    matchedAt: now.toISOString(),
+  };
+  const hit = matchRecipe(text);
+  if (hit) {
+    return {
+      ...base,
+      kind: "recipe",
+      recipeId: hit.recipe.id,
+      captures: hit.captures,
+      criteria: criteriaFor([]),
+    };
+  }
+  const query = searchQuery(text);
+  if (!query) return { ...base, kind: "none", criteria: criteriaFor([]) };
+  const [local, registry] = await Promise.all([
+    searchJson(exec, ["model", "type", "search", query, "--json"]),
+    searchJson(exec, ["extension", "search", query, "--json"]),
+  ]);
+  const found = new Map<string, string>();
+  const rows = (registry as { extensions?: unknown } | null)?.extensions;
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      if (typeof r?.name === "string") {
+        found.set(
+          r.name,
+          typeof r.description === "string" ? r.description : "",
+        );
+      }
+    }
+  }
+  const types = (local as { results?: unknown } | null)?.results;
+  if (Array.isArray(types)) {
+    for (const t of types) {
+      if (typeof t?.raw === "string" && !found.has(t.raw)) found.set(t.raw, "");
+    }
+  }
+  const candidates = [...found].filter(([name]) => isAllowed(name)).slice(
+    0,
+    MAX_CANDIDATES,
+  ).map((
+    [name, description],
+  ) => ({ name, description }));
+  return {
+    ...base,
+    kind: candidates.length ? "candidates" : "none",
+    query,
+    candidates,
+    criteria: criteriaFor(candidates),
+  };
+}
+
+/** Run the recipe with this id; an unknown id is a failed result. */
+export async function executeRecipe(
+  recipeId: string,
+  captures: string[],
+  exec: Exec,
+  repoDir: string,
+): Promise<{ ok: boolean; text: string; error: string }> {
+  const recipe = RECIPES.find((r) => r.id === recipeId);
+  if (!recipe) {
+    return { ok: false, text: "", error: `unknown recipe ${recipeId}` };
+  }
+  return await runRecipe({ recipe, captures }, exec, repoDir);
+}
+
+/**
+ * Runs the `swamp` on the path; used by `match` and `execute`. Arguments are
+ * never joined into a shell line. Recipes pass fixed words and digits, and a
+ * search passes at most four words of `[a-z0-9_-]` (see README, "Subprocesses").
+ */
+export const swampExec: Exec = async (args) => {
+  // swamp-quality-ignore deno-command
+  const out = await new Deno.Command("swamp", {
+    args,
+    stdin: "null",
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const dec = new TextDecoder();
+  return {
+    code: out.code,
+    stdout: dec.decode(out.stdout),
+    stderr: dec.decode(out.stderr),
+  };
+};
+
+/** The text shown when a recipe answers the turn. */
+export function recipeText(recipeId: string, answer: string): string {
+  return `${answer}\n\nAnswered by puddlerouter (recipe ${recipeId}) without ` +
+    "Claude. To ask Claude instead, send the prompt again starting with llm:";
+}
+
+/** The context added when search found an extension but no recipe covers it. */
+export function extensionHint(name: string): string {
+  return `puddlerouter: this looks answerable by a program. The swamp ` +
+    `extension ${name} may cover it: run \`swamp model type describe ${name}\` ` +
+    `(\`swamp extension pull ${name}\` first if it is missing) and use it ` +
+    "rather than raw tools. If it does not cover this, ask the user whether to " +
+    "raise a recipe-wanted issue.";
+}
+
 /** The arguments `buildReply` needs; `complete` and `answerCutoff` default. */
 export type BuildReplyArgs =
   & Omit<ReplyArgs, "mode" | "cutoff" | "complete" | "answerCutoff">
@@ -271,12 +482,32 @@ export function buildReply(
   const answer = yes === null ? null : decisionAnswer(yes, answerCutoff);
   let wouldAction: Reply["action"] = "pass";
   let text = "";
+  let recipe = "";
+  let extension = "";
   let reason: string;
   if (!choice) reason = "no route answer";
   else if (route !== choice) reason = "confidence below cut-off";
   else if (route === "llm") reason = "llm route";
-  else if (route === "deterministic") reason = `${route} route not built yet`;
-  else if (!complete) reason = "decision text not in the turn";
+  else if (route === "deterministic") {
+    const picked = /^c([1-9])$/.exec(args.pickChoice ?? "");
+    const candidate = picked ? args.candidates?.[Number(picked[1]) - 1] : null;
+    if (args.matchKind === "recipe" && args.recipeId) {
+      recipe = args.recipeId;
+      if (args.resultOk && args.resultText) {
+        wouldAction = "block";
+        text = recipeText(args.recipeId, args.resultText);
+        reason = `recipe ${args.recipeId} answered`;
+      } else reason = `recipe ${args.recipeId} failed`;
+    } else if (
+      args.matchKind === "candidates" && candidate &&
+      (args.pickConfidence ?? 0) >= args.cutoff
+    ) {
+      wouldAction = "hint";
+      extension = candidate.name;
+      text = extensionHint(candidate.name);
+      reason = `extension ${candidate.name}, no recipe`;
+    } else reason = "no extension found";
+  } else if (!complete) reason = "decision text not in the turn";
   else if (answer === null) reason = "no decision answer";
   else if (answer === "unsure") reason = "decision unsure";
   else {
@@ -297,6 +528,8 @@ export function buildReply(
     answer,
     yes,
     answerCutoff,
+    recipe,
+    extension,
     sourceRef: args.sourceRef,
     reason: shadow ? `shadow: ${reason}` : reason,
     elapsedMs: args.hookStartedAt ? now.getTime() - args.hookStartedAt : null,
@@ -314,7 +547,7 @@ interface MethodContext {
   logger: { info: (msg: string, props: Record<string, unknown>) => void };
 }
 
-/** The model type: `load` and `reply`, one resource each. */
+/** The model type: `load`, `match`, `execute` and `reply`, one resource each. */
 export const model = {
   type: "@puddleworks/puddlerouter",
   version: "2026.10.13.1",
@@ -332,8 +565,61 @@ export const model = {
       lifetime: "14d" as const,
       garbageCollection: 2000,
     },
+    match: {
+      description:
+        "How a deterministic turn can be answered: recipe or search.",
+      schema: MatchSchema,
+      lifetime: "14d" as const,
+      garbageCollection: 2000,
+    },
+    result: {
+      description: "What running a recipe gave.",
+      schema: ResultSchema,
+      lifetime: "14d" as const,
+      garbageCollection: 2000,
+    },
   },
   methods: {
+    match: {
+      description:
+        "Match a turn to a built-in recipe, else search for extensions; store `match`.",
+      arguments: MatchArgsSchema,
+      execute: async (args: MatchArgs, context: MethodContext) => {
+        context.logger.info("Matching turn", {});
+        const match = await findMatch(args.text, swampExec);
+        const handle = await context.writeResource("match", "match", match);
+        context.logger.info("Matched {kind} {recipeId}", {
+          kind: match.kind,
+          recipeId: match.recipeId,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
+    execute: {
+      description: "Run a built-in recipe through swamp; store `result`.",
+      arguments: ExecuteArgsSchema,
+      execute: async (args: ExecuteArgs, context: MethodContext) => {
+        context.logger.info("Running recipe {recipeId}", {
+          recipeId: args.recipeId,
+        });
+        const r = await executeRecipe(
+          args.recipeId,
+          args.captures,
+          swampExec,
+          args.repoDir,
+        );
+        const handle = await context.writeResource("result", "result", {
+          recipeId: args.recipeId,
+          ...r,
+          ranAt: new Date().toISOString(),
+        });
+        context.logger.info("Recipe {recipeId} ok {ok}", {
+          recipeId: args.recipeId,
+          ok: r.ok,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
     load: {
       description: "Read a turn file, clean it and store it as `turn`.",
       arguments: LoadArgsSchema,

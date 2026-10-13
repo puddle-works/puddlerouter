@@ -14,6 +14,8 @@ import {
   cleanTurn,
   decisionAnswer,
   effectiveRoute,
+  executeRecipe,
+  findMatch,
   loadTurn,
   looksSecret,
   model,
@@ -391,4 +393,219 @@ Deno.test("reply logs before and after it writes", async () => {
     "write reply",
     "log Reply {action} for {sourceRef} ({reason})",
   ]);
+});
+
+// ---- deterministic route ----
+
+const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+
+function fakeExec(replies: Record<string, string>) {
+  const calls: string[][] = [];
+  const exec = (args: string[]) => {
+    calls.push(args);
+    const key = Object.keys(replies).find((k) => args.join(" ").startsWith(k));
+    return Promise.resolve(
+      key === undefined
+        ? { code: 1, stdout: "", stderr: "nope" }
+        : ok(replies[key]),
+    );
+  };
+  return { exec, calls };
+}
+
+Deno.test("findMatch picks a recipe without searching", async () => {
+  const { exec, calls } = fakeExec({});
+  const m = await findMatch(
+    "git status",
+    exec,
+    new Date("2026-10-13T10:00:00Z"),
+  );
+  assertEquals(m.kind, "recipe");
+  assertEquals(m.recipeId, "git-status");
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("findMatch lists candidates from the local types and the registry", async () => {
+  const { exec, calls } = fakeExec({
+    "model type search": JSON.stringify({
+      results: [{ raw: "@swamp/hetzner-cloud", normalized: "x" }],
+    }),
+    "extension search": JSON.stringify({
+      extensions: [
+        { name: "@swamp/hetzner-cloud", description: "Hetzner Cloud models" },
+        { name: "@swamp/other", description: "Other" },
+      ],
+    }),
+  });
+  const m = await findMatch("list the hetzner servers in my account", exec);
+  assertEquals(m.kind, "candidates");
+  assertEquals(m.query, "hetzner servers account");
+  assertEquals(m.candidates.map((c) => c.name), [
+    "@swamp/hetzner-cloud",
+    "@swamp/other",
+  ]);
+  assertEquals(Object.keys(m.criteria), ["c1", "c2", "c3", "none"]);
+  assertEquals(m.criteria.c3, "No such candidate.");
+  assert(calls.every((c) => !c.join(" ").includes("hetzner servers in my")));
+});
+
+Deno.test("findMatch fails open to none when searches fail or find nothing", async () => {
+  const none = await findMatch("list the hetzner servers", fakeExec({}).exec);
+  assertEquals(none.kind, "none");
+  assertEquals(none.candidates, []);
+  const empty = await findMatch("hello", fakeExec({}).exec);
+  assertEquals(empty.kind, "none");
+});
+
+Deno.test("executeRecipe runs the recipe and returns its text", async () => {
+  const { exec } = fakeExec({
+    "behavior run @swamp/git status git": JSON.stringify({
+      dataArtifacts: [{
+        name: "status",
+        attributes: {
+          branch: "main",
+          entries: [],
+        },
+      }],
+    }),
+  });
+  const r = await executeRecipe("git-status", [], exec, "/repo");
+  assertEquals(r.ok, true);
+  assert(r.text.length > 0);
+});
+
+Deno.test("executeRecipe reports an unknown recipe as a failure", async () => {
+  const r = await executeRecipe("nope", [], fakeExec({}).exec, "/repo");
+  assertEquals(r.ok, false);
+  assertMatch(r.error, /unknown recipe/);
+});
+
+const detArgs = {
+  mode: "live" as const,
+  sourceRef: "puddlerouter:0123456789abcdef",
+  choice: "deterministic",
+  confidence: 0.9,
+  cutoff: 0.7,
+  complete: true,
+};
+
+Deno.test("buildReply blocks with a recipe's answer in live mode", () => {
+  const r = buildReply({
+    ...detArgs,
+    matchKind: "recipe",
+    recipeId: "git-status",
+    resultOk: true,
+    resultText: "On branch main, clean.",
+  });
+  assertEquals(r.action, "block");
+  assertMatch(r.text, /^On branch main, clean\./);
+  assertMatch(r.text, /recipe git-status/);
+  assertMatch(r.text, /starting with llm:/);
+  assertEquals(r.reason, "recipe git-status answered");
+});
+
+Deno.test("buildReply passes when the recipe failed", () => {
+  const r = buildReply({
+    ...detArgs,
+    matchKind: "recipe",
+    recipeId: "git-status",
+    resultOk: false,
+    resultText: "",
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.reason, "recipe git-status failed");
+});
+
+const cands = [
+  { name: "@swamp/hetzner-cloud", description: "Hetzner Cloud models" },
+];
+
+Deno.test("buildReply hints at the extension Jev picks", () => {
+  const r = buildReply({
+    ...detArgs,
+    matchKind: "candidates",
+    candidates: cands,
+    pickChoice: "c1",
+    pickConfidence: 0.9,
+  });
+  assertEquals(r.action, "hint");
+  assertMatch(r.text, /@swamp\/hetzner-cloud/);
+  assertMatch(r.text, /swamp model type describe/);
+  assertEquals(r.reason, "extension @swamp/hetzner-cloud, no recipe");
+});
+
+Deno.test("buildReply passes when the pick is none, unsure or out of range", () => {
+  for (
+    const [pickChoice, pickConfidence] of [
+      ["none", 0.9],
+      ["c1", 0.5],
+      ["c2", 0.9],
+      [undefined, undefined],
+    ] as const
+  ) {
+    const r = buildReply({
+      ...detArgs,
+      matchKind: "candidates",
+      candidates: cands,
+      pickChoice,
+      pickConfidence,
+    });
+    assertEquals(r.action, "pass");
+    assertEquals(r.reason, "no extension found");
+  }
+});
+
+Deno.test("buildReply in shadow mode passes a recipe answer but records it", () => {
+  const r = buildReply({
+    ...detArgs,
+    mode: "shadow",
+    matchKind: "recipe",
+    recipeId: "git-log",
+    resultOk: true,
+    resultText: "abc",
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.text, "");
+  assertEquals(r.wouldAction, "block");
+  assertEquals(r.recipe, "git-log");
+});
+
+Deno.test("buildReply does not use a recipe off the deterministic route", () => {
+  const r = buildReply({
+    ...detArgs,
+    choice: "llm",
+    matchKind: "recipe",
+    recipeId: "git-status",
+    resultOk: true,
+    resultText: "x",
+  });
+  assertEquals(r.action, "pass");
+});
+
+Deno.test("match and execute write one resource each", async () => {
+  const w1: Written[] = [];
+  await model.methods.match.execute({ text: "git status" }, fakeContext(w1));
+  assertEquals(w1.length, 1);
+  assertEquals(w1[0].spec, "match");
+  assertEquals(w1[0].data.recipeId, "git-status");
+  const w2: Written[] = [];
+  await model.methods.execute.execute(
+    { recipeId: "nope", captures: [], repoDir: "/nonexistent" },
+    fakeContext(w2),
+  );
+  assertEquals(w2[0].spec, "result");
+  assertEquals(w2[0].data.ok, false);
+});
+
+Deno.test("findMatch offers only allowlisted extensions", async () => {
+  const { exec } = fakeExec({
+    "extension search": JSON.stringify({
+      extensions: [
+        { name: "@hivemq/hetzner/servers", description: "third party" },
+        { name: "@swamp/hetzner-cloud", description: "official" },
+      ],
+    }),
+  });
+  const m = await findMatch("list the hetzner servers", exec);
+  assertEquals(m.candidates.map((c) => c.name), ["@swamp/hetzner-cloud"]);
 });
