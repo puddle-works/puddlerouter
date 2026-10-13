@@ -3,10 +3,12 @@
  *
  * The `puddlerouter` workflow runs these methods for each turn the hook hands
  * over: `load` reads the turn file and stores the cleaned text, Jev picks a
- * route, and `reply` turns the route into what the hook should do.
+ * route, Jev answers a yes/no question on the decision route, and `reply`
+ * turns the route into what the hook should do.
  *
- * Step 1 is shadow mode: every route is logged and the reply always passes,
- * so Claude runs as normal.
+ * In live mode a confident yes or no blocks the turn with Jev's answer, so
+ * Claude does not run. In shadow mode every reply passes, so Claude runs as
+ * normal, and the reply records what live mode would have done.
  *
  * Output: a `turn` resource (the cleaned text and its `sourceRef`) and a
  * `reply` resource (`{action, text}` plus the route it came from).
@@ -14,6 +16,11 @@
  * @module
  */
 import { z } from "npm:zod@4";
+
+/** Jev's answer to a decision: unsure when it is not past the cut-off. */
+export const ANSWERS = ["yes", "no", "unsure"] as const;
+/** One answer. */
+export type Answer = typeof ANSWERS[number];
 
 /** The routes Jev picks between. */
 export const ROUTES = ["deterministic", "decision", "llm"] as const;
@@ -51,6 +58,8 @@ export const TurnSchema = z.object({
   fenced: z.number().int(),
   /** True when the text was cut at `maxChars`. */
   truncated: z.boolean(),
+  /** True when nothing was replaced or cut, so the text is the whole turn. */
+  complete: z.boolean(),
   loadedAt: z.iso.datetime(),
 });
 /** The stored turn. */
@@ -72,6 +81,15 @@ export const ReplyArgsSchema = z.object({
   hookStartedAt: z.number().optional().describe(
     "When the hook started, in ms since the epoch; 0 or missing if unknown.",
   ),
+  complete: z.boolean().default(false).describe(
+    "The turn's `complete`. A decision is only answered for a complete turn.",
+  ),
+  yes: z.number().min(0).max(1).nullable().optional().describe(
+    "Jev's probability that the answer is yes; null if it was not asked.",
+  ),
+  answerCutoff: z.number().min(0.5).max(1).default(0.8).describe(
+    "A yes needs `yes` at or above this, a no at or below 1 minus this.",
+  ),
 });
 /** The arguments `reply` accepts. */
 export type ReplyArgs = z.infer<typeof ReplyArgsSchema>;
@@ -82,6 +100,8 @@ export const ReplySchema = z.object({
   action: z.enum(["block", "hint", "pass"]),
   /** The answer (block) or the context (hint). Empty for pass. */
   text: z.string(),
+  /** What live mode does: the same as `action` unless the mode is shadow. */
+  wouldAction: z.enum(["block", "hint", "pass"]),
   mode: z.enum(["shadow", "live"]),
   /** The route taken after the cut-off. */
   route: z.enum(ROUTES),
@@ -89,6 +109,11 @@ export const ReplySchema = z.object({
   choice: z.string(),
   confidence: z.number().nullable(),
   cutoff: z.number(),
+  /** Jev's answer on the decision route; null if it was not asked. */
+  answer: z.enum(ANSWERS).nullable(),
+  /** Jev's probability of yes; null if it was not asked. */
+  yes: z.number().nullable(),
+  answerCutoff: z.number(),
   sourceRef: z.string(),
   /** Why the action was chosen. */
   reason: z.string(),
@@ -159,6 +184,8 @@ export async function loadTurn(
     ...cleaned,
     sourceRef: await sourceRef(cleaned.text),
     empty: ONLY_PLACEHOLDERS.test(cleaned.text),
+    complete: cleaned.pasted === 0 && cleaned.fenced === 0 &&
+      !cleaned.truncated,
     loadedAt: now.toISOString(),
   };
 }
@@ -174,32 +201,76 @@ export function effectiveRoute(
   return choice as Route;
 }
 
-/** What the hook should do with the turn. Step 1 always passes. */
-export function buildReply(
-  args: Omit<ReplyArgs, "mode" | "cutoff"> & {
+/** yes or no if Jev's probability of yes is past the cut-off, else unsure. */
+export function decisionAnswer(yes: number, answerCutoff: number): Answer {
+  if (yes >= answerCutoff) return "yes";
+  if (1 - yes >= answerCutoff) return "no";
+  return "unsure";
+}
+
+/** The text shown to the user when a decision blocks the turn. */
+export function decisionText(answer: "yes" | "no", yes: number): string {
+  const sure = Math.round((answer === "yes" ? yes : 1 - yes) * 100);
+  return `Jev: ${answer} (${sure}% sure).\n` +
+    "Answered by puddlerouter without Claude. To ask Claude instead, " +
+    "send the prompt again starting with llm:";
+}
+
+/** The arguments `buildReply` needs; `complete` and `answerCutoff` default. */
+export type BuildReplyArgs =
+  & Omit<ReplyArgs, "mode" | "cutoff" | "complete" | "answerCutoff">
+  & {
     mode: ReplyArgs["mode"];
     cutoff: number;
-  },
+    complete?: boolean;
+    answerCutoff?: number;
+  };
+
+/**
+ * What the hook should do with the turn. Live mode blocks a decision Jev
+ * answered past the answer cut-off; anything else passes. Shadow mode always
+ * passes and records the live action in `wouldAction`.
+ */
+export function buildReply(
+  args: BuildReplyArgs,
   now: Date = new Date(),
 ): Reply {
   const choice = args.choice ?? "";
   const route = effectiveRoute(choice, args.confidence, args.cutoff);
+  const complete = args.complete ?? false;
+  const answerCutoff = args.answerCutoff ?? 0.8;
+  const yes = route === "decision" && complete ? args.yes ?? null : null;
+  const answer = yes === null ? null : decisionAnswer(yes, answerCutoff);
+  let wouldAction: Reply["action"] = "pass";
+  let text = "";
   let reason: string;
   if (!choice) reason = "no route answer";
   else if (route !== choice) reason = "confidence below cut-off";
   else if (route === "llm") reason = "llm route";
-  else reason = `${route} route not built yet`;
-  if (args.mode === "shadow") reason = `shadow: ${reason}`;
+  else if (route === "deterministic") reason = `${route} route not built yet`;
+  else if (!complete) reason = "decision text not in the turn";
+  else if (answer === null) reason = "no decision answer";
+  else if (answer === "unsure") reason = "decision unsure";
+  else {
+    wouldAction = "block";
+    text = decisionText(answer, yes as number);
+    reason = `decision answered ${answer}`;
+  }
+  const shadow = args.mode === "shadow";
   return {
-    action: "pass",
-    text: "",
+    action: shadow ? "pass" : wouldAction,
+    text: shadow ? "" : text,
+    wouldAction,
     mode: args.mode,
     route,
     choice,
     confidence: args.confidence ?? null,
     cutoff: args.cutoff,
+    answer,
+    yes,
+    answerCutoff,
     sourceRef: args.sourceRef,
-    reason,
+    reason: shadow ? `shadow: ${reason}` : reason,
     elapsedMs: args.hookStartedAt ? now.getTime() - args.hookStartedAt : null,
     repliedAt: now.toISOString(),
   };

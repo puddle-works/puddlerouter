@@ -1,7 +1,7 @@
 {
   "extension": "@puddleworks/puddlerouter",
   "version": "2026.10.13.1",
-  "reviewedAt": "2026-10-13T10:12:16Z",
+  "reviewedAt": "2026-10-13T10:26:19Z",
   "dimensions": [
     {
       "id": "credentials-secrets",
@@ -11,17 +11,17 @@
     {
       "id": "logging-quality",
       "verdict": "pass",
-      "note": "load and reply log at info on entry and on completion with structured properties (tested), and never log the turn text."
+      "note": "load and reply log at info on entry and on completion with structured properties (tested); reply logs the action and reason. Neither logs the turn text."
     },
     {
       "id": "error-handling",
       "verdict": "pass",
-      "note": "load throws on an unreadable turn file before writing (tested). reply's inputs are validated by zod; a missing or unknown route answer is recorded as llm with a reason rather than thrown, so the workflow fails open."
+      "note": "load throws on an unreadable turn file before writing (tested). reply inputs are validated by zod; a missing route answer, a missing or failed decide answer, an unsure answer and an incomplete turn are each recorded with a reason and pass, so the workflow fails open (each tested)."
     },
     {
       "id": "testing-completeness",
       "verdict": "pass",
-      "note": "21 unit tests: cleaning, hashing, empty turns, cut-off, reply reasons and elapsedMs, load failure, reply writing one resource, and log order. 22 hook and workflow tests run against a fake swamp."
+      "note": "30 unit tests: cleaning, hashing, empty and complete turns, cut-offs, the answer cut-off at its edges, every reply reason, live block text for yes and no, shadow passing with wouldAction, elapsedMs, load failure, reply writing one resource, and log order. 25 hook and workflow tests, including that the decide step is guarded and asks the question the decision eval scored."
     },
     {
       "id": "idempotency-resilience",
@@ -41,7 +41,7 @@
     {
       "id": "published-surface-hygiene",
       "verdict": "pass",
-      "note": "Manifest publishes README, LICENSE, the model and the workflow. README has no IPs, hostnames, account ids or personal paths; private visibility."
+      "note": "Manifest publishes README, LICENSE, the model and the router workflow (not the eval workflows). README has no IPs, hostnames, account ids or personal paths; private visibility."
     },
     {
       "id": "schema-strictness",
@@ -66,17 +66,17 @@
     {
       "id": "instance-names",
       "verdict": "pass",
-      "note": "load writes turn/turn and reply writes reply/reply; no overlap. Every schema field is written (checked field by field)."
+      "note": "load writes turn/turn and reply writes reply/reply; no overlap. Every schema field is written, including complete, wouldAction, answer, yes and answerCutoff (checked field by field)."
     },
     {
       "id": "data-access",
       "verdict": "na",
-      "note": "Reads no stored data; reply gets the route through workflow inputs."
+      "note": "Reads no stored data; reply gets the route, the decision answer and complete through workflow inputs from steps.*."
     },
     {
       "id": "version-upgrades",
       "verdict": "na",
-      "note": "First published version; no earlier schema to upgrade from."
+      "note": "Not yet published (swamp extension version gives currentPublished null, nextVersion 2026.10.13.1), so the version stays 2026.10.13.1. Global arguments are unchanged; the new resource fields are additive."
     }
   ]
 }

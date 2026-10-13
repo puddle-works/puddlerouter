@@ -78,6 +78,8 @@ typed turn to swamp, Jev or Claude. The plan and step 0 findings are in
   only. `@...` input values are read as files, and inputs are recorded in run
   history.
 - The route instructions and criteria in `workflow-puddlerouter.yaml` and
-  `workflow-puddlerouter-route-eval.yaml` must stay identical.
+  `workflow-puddlerouter-route-eval.yaml` must stay identical, and so must the
+  decide question in `workflow-puddlerouter.yaml` and
+  `workflow-puddlerouter-decision-eval.yaml`.
 
 [adr]: https://github.com/puddle-works/puddleworks-apps/blob/main/docs/adr/ADR-004-one-repo-per-puddle.md

@@ -3,10 +3,12 @@ name: "@puddleworks/puddlerouter"
 description: >-
   Route one turn typed into Claude Code. The hook writes the turn to a temp
   file and passes only its path. load cleans and hashes the text, Jev picks a
-  route, and reply stores what the hook should do. In shadow mode (step 1)
-  the reply always passes, so the run is a log of the route Jev would take.
-  The route instructions and criteria must stay the same as in
-  puddlerouter-route-eval.
+  route, Jev answers the yes/no question on the decision route, and reply
+  stores what the hook should do. In live mode a confident answer blocks the
+  turn with Jev's answer. In shadow mode the reply always passes, so the run
+  is a log of what live mode would do. The route question must stay the same
+  as in puddlerouter-route-eval, and the decision question as in
+  puddlerouter-decision-eval.
 version: 1
 tags:
   maxReruns: "3"
@@ -26,6 +28,12 @@ inputs:
       type: number
       default: 0.7
       description: Below this confidence the route is llm.
+    answerCutoff:
+      type: number
+      default: 0.8
+      description: >-
+        Jev answers yes at a yes probability at or above this, no at or below
+        1 minus this; in between Claude answers.
     hookStartedAt:
       type: number
       default: 0
@@ -33,7 +41,7 @@ inputs:
   required: [turnFile]
 jobs:
   - name: main
-    description: load, route, reply.
+    description: load, route, decide, reply.
     dependsOn: []
     weight: 0
     steps:
@@ -80,6 +88,33 @@ jobs:
               llm: >-
                 Anything else: writing, changing, reviewing, planning or
                 explaining code or documents.
+      - name: decide
+        description: >-
+          Ask Jev the yes/no question in the turn. Skipped unless the route is
+          a decision at or above the cut-off and the turn is complete (nothing
+          pasted, fenced or cut, so the text to judge is all there).
+        dependsOn:
+          - step: route
+            condition:
+              type: always
+        weight: 0
+        allowFailure: true
+        guard: >-
+          ${{ !(steps.load.outputs.complete && has(steps.route) &&
+          has(steps.route.outputs) && steps.route.outputs.choice == "decision" &&
+          steps.route.outputs.confidence >= inputs.cutoff) }}
+        task:
+          type: model_method
+          modelIdOrName: jev
+          methodName: noul
+          inputs:
+            name: decide
+            state: ${{ steps.load.outputs.text }}
+            instructions: >-
+              Answer the yes/no question asked in this request, judging only
+              the text given in it.
+            yes: The answer to the question is yes.
+            no: The answer to the question is no.
       - name: reply
         description: Store what the hook should do. Runs whether or not Jev answered.
         dependsOn:
@@ -87,6 +122,9 @@ jobs:
             condition:
               type: succeeded
           - step: route
+            condition:
+              type: always
+          - step: decide
             condition:
               type: always
         weight: 0
@@ -98,7 +136,10 @@ jobs:
           inputs:
             mode: ${{ inputs.mode }}
             cutoff: ${{ inputs.cutoff }}
+            answerCutoff: ${{ inputs.answerCutoff }}
+            complete: ${{ steps.load.outputs.complete }}
             hookStartedAt: ${{ inputs.hookStartedAt }}
             sourceRef: ${{ steps.load.outputs.sourceRef }}
             choice: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.choice : "" }}'
             confidence: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.confidence : 0.0 }}'
+            yes: '${{ has(steps.decide) && has(steps.decide.outputs) ? steps.decide.outputs.noul : null }}'

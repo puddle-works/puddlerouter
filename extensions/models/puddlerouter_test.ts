@@ -12,6 +12,7 @@ import {
 import {
   buildReply,
   cleanTurn,
+  decisionAnswer,
   effectiveRoute,
   loadTurn,
   model,
@@ -127,6 +128,92 @@ Deno.test("buildReply passes when the route step gave no answer", () => {
   assertEquals(reply.reason, "no route answer");
 });
 
+const DECIDED = {
+  sourceRef: "puddlerouter:0123456789abcdef",
+  choice: "decision",
+  confidence: 0.95,
+  cutoff: 0.7,
+  answerCutoff: 0.8,
+  complete: true,
+};
+
+Deno.test("decisionAnswer is yes or no only past the answer cut-off", () => {
+  assertEquals(decisionAnswer(0.95, 0.8), "yes");
+  assertEquals(decisionAnswer(0.8, 0.8), "yes");
+  assertEquals(decisionAnswer(0.05, 0.8), "no");
+  assertEquals(decisionAnswer(0.2, 0.8), "no");
+  assertEquals(decisionAnswer(0.5, 0.8), "unsure");
+  assertEquals(decisionAnswer(0.79, 0.8), "unsure");
+});
+
+Deno.test("buildReply in live mode blocks with Jev's yes", () => {
+  const reply = buildReply({ ...DECIDED, mode: "live", yes: 0.95 });
+  assertEquals(reply.action, "block");
+  assertEquals(reply.wouldAction, "block");
+  assertEquals(reply.route, "decision");
+  assertEquals(reply.answer, "yes");
+  assertEquals(reply.yes, 0.95);
+  assertEquals(reply.reason, "decision answered yes");
+  assertMatch(reply.text, /^Jev: yes \(95% sure\)\./);
+  assertMatch(reply.text, /llm:/);
+});
+
+Deno.test("buildReply in live mode blocks with Jev's no", () => {
+  const reply = buildReply({ ...DECIDED, mode: "live", yes: 0.1 });
+  assertEquals(reply.action, "block");
+  assertEquals(reply.answer, "no");
+  assertMatch(reply.text, /^Jev: no \(90% sure\)\./);
+});
+
+Deno.test("buildReply passes when Jev is unsure of the answer", () => {
+  const reply = buildReply({ ...DECIDED, mode: "live", yes: 0.6 });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.text, "");
+  assertEquals(reply.answer, "unsure");
+  assertEquals(reply.reason, "decision unsure");
+});
+
+Deno.test("buildReply passes when the decision step gave no answer", () => {
+  const reply = buildReply({ ...DECIDED, mode: "live", yes: null });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.answer, null);
+  assertEquals(reply.yes, null);
+  assertEquals(reply.reason, "no decision answer");
+});
+
+Deno.test("buildReply passes a decision whose text was pasted, fenced or cut", () => {
+  const reply = buildReply({
+    ...DECIDED,
+    mode: "live",
+    complete: false,
+    yes: 0.95,
+  });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.answer, null);
+  assertEquals(reply.reason, "decision text not in the turn");
+});
+
+Deno.test("buildReply ignores a yes answer on another route", () => {
+  const reply = buildReply({
+    ...DECIDED,
+    mode: "live",
+    choice: "llm",
+    yes: 0.95,
+  });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.answer, null);
+  assertEquals(reply.yes, null);
+});
+
+Deno.test("buildReply in shadow mode passes but records what live would do", () => {
+  const reply = buildReply({ ...DECIDED, mode: "shadow", yes: 0.95 });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.text, "");
+  assertEquals(reply.wouldAction, "block");
+  assertEquals(reply.answer, "yes");
+  assertEquals(reply.reason, "shadow: decision answered yes");
+});
+
 Deno.test("buildReply records the time since the hook started", () => {
   const args = {
     mode: "shadow" as const,
@@ -190,6 +277,19 @@ Deno.test("loadTurn marks a turn that is only pasted or code as empty", async ()
   assertEquals((await loadTurn("   ", 2000)).empty, true);
 });
 
+Deno.test("loadTurn marks a turn complete only if nothing was removed or cut", async () => {
+  assertEquals((await loadTurn("is 'x2' a good name?", 2000)).complete, true);
+  assertEquals(
+    (await loadTurn(`is this good?\n${OPEN}\nx\n${CLOSE}`, 2000)).complete,
+    false,
+  );
+  assertEquals(
+    (await loadTurn("is this good?\n```\nx\n```", 2000)).complete,
+    false,
+  );
+  assertEquals((await loadTurn("a".repeat(50), 10)).complete, false);
+});
+
 Deno.test("load fails when the turn file is missing", async () => {
   await assertRejects(() =>
     model.methods.load.execute(
@@ -208,6 +308,8 @@ Deno.test("reply writes one reply resource", async () => {
       choice: "llm",
       confidence: 0.99,
       cutoff: 0.7,
+      complete: true,
+      answerCutoff: 0.8,
     },
     fakeContext(written),
   );
@@ -237,6 +339,8 @@ Deno.test("reply logs before and after it writes", async () => {
       choice: "llm",
       confidence: 0.99,
       cutoff: 0.7,
+      complete: true,
+      answerCutoff: 0.8,
     },
     fakeContext([], events),
   );

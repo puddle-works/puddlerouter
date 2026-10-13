@@ -1,0 +1,38 @@
+# Hand-labelled answers for the step 2 decision check: the ten decision turns
+# from turns.yaml, each with the answer a careful person would give.
+#
+# Jev's `noul` is its probability of yes. With answer cut-off c, it answers yes
+# at noul >= c, no at noul <= 1 - c, and is unsure in between (the router then
+# lets Claude answer). Accuracy is the share of turns answered correctly; an
+# unsure turn is not wrong, only not answered.
+turns:
+  - id: t11
+    text: "is this a good commit message: 'fix stuff'?"
+    answer: "no"
+  - id: t12
+    text: "does this sentence read as British English: 'The colour of the organisation's logo'?"
+    answer: "yes"
+  - id: t13
+    text: "should 'retry on 429' be treated as a transient error? yes or no"
+    answer: "yes"
+  - id: t14
+    text: "is 'Add hook for routing prompts' written in the imperative mood?"
+    answer: "yes"
+  - id: t15
+    text: "is this PR title under 70 characters and descriptive: 'puddlerouter: shadow-mode hook and load/reply methods'?"
+    answer: "yes"
+  - id: t16
+    text: "is this error message friendly to a non-technical user: 'ENOENT: no such file or directory'?"
+    answer: "no"
+  - id: t17
+    text: "is the following a question about billing: 'why was I charged twice this month?'"
+    answer: "yes"
+  - id: t18
+    text: "does this log line indicate an error: 'INFO server started on :8080'?"
+    answer: "no"
+  - id: t19
+    text: "is 'utilise' plain English, yes or no?"
+    answer: "no"
+  - id: t20
+    text: "is this variable name descriptive enough: 'x2'?"
+    answer: "no"
