@@ -157,7 +157,7 @@ Deno.test("shadow mode runs the workflow with only the turn file's path", async 
   const call = run.calls[0];
   assertMatch(
     call,
-    /^workflow run @mesgme\/puddlerouter --repo-dir \S+ --input turnFile=\/\S+ --input mode=shadow --input hookStartedAt=\d{13}$/,
+    /^workflow run @puddleworks\/puddlerouter --repo-dir \S+ --input turnFile=\/\S+ --input mode=shadow --input hookStartedAt=\d{13}$/,
   );
   assert(
     !call.includes("fix stuff"),

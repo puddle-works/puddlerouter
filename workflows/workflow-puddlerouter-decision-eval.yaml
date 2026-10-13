@@ -1,0 +1,47 @@
+id: f050dbae-99e4-421f-ab3e-3f40a19cce32
+name: puddlerouter-decision-eval
+description: >-
+  Ask Jev the router's decision question for each hand-labelled yes/no turn,
+  so its answers can be scored at several answer cut-offs. Run it with
+  --input-file docs/route-eval/decisions.yaml; each answer is stored as the
+  jev model's noul data named decision-eval-<turn id>. The instructions, yes
+  and no here must stay the same as the decide step in
+  workflow-puddlerouter.yaml.
+version: 1
+tags:
+  maxReruns: "3"
+  maxWallClock: "10m"
+inputs:
+  type: object
+  properties:
+    turns:
+      type: array
+      description: Labelled yes/no turns, each {id, text, answer}.
+  required: [turns]
+jobs:
+  - name: eval
+    description: One jev.noul per turn.
+    dependsOn: []
+    weight: 0
+    steps:
+      - name: decide
+        description: Ask Jev the yes/no question in the turn.
+        dependsOn: []
+        weight: 0
+        allowFailure: true
+        concurrency: 3
+        forEach:
+          item: turn
+          in: ${{ inputs.turns }}
+        task:
+          type: model_method
+          modelIdOrName: jev
+          methodName: noul
+          inputs:
+            name: decision-eval-${{ self.turn.id }}
+            state: ${{ self.turn.text }}
+            instructions: >-
+              Answer the yes/no question asked in this request, judging only
+              the text given in it.
+            yes: The answer to the question is yes.
+            no: The answer to the question is no.

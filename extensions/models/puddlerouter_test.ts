@@ -12,8 +12,10 @@ import {
 import {
   buildReply,
   cleanTurn,
+  decisionAnswer,
   effectiveRoute,
   loadTurn,
+  looksSecret,
   model,
   normalise,
   sourceRef,
@@ -22,8 +24,8 @@ import {
 const OPEN = '<pasted_content id="abc">';
 const CLOSE = '</pasted_content id="abc">';
 
-Deno.test("model type is @mesgme/puddlerouter", () => {
-  assertEquals(model.type, "@mesgme/puddlerouter");
+Deno.test("model type is @puddleworks/puddlerouter", () => {
+  assertEquals(model.type, "@puddleworks/puddlerouter");
 });
 
 Deno.test("normalise lowercases and collapses whitespace", () => {
@@ -127,6 +129,92 @@ Deno.test("buildReply passes when the route step gave no answer", () => {
   assertEquals(reply.reason, "no route answer");
 });
 
+const DECIDED = {
+  sourceRef: "puddlerouter:0123456789abcdef",
+  choice: "decision",
+  confidence: 0.95,
+  cutoff: 0.7,
+  answerCutoff: 0.8,
+  complete: true,
+};
+
+Deno.test("decisionAnswer is yes or no only past the answer cut-off", () => {
+  assertEquals(decisionAnswer(0.95, 0.8), "yes");
+  assertEquals(decisionAnswer(0.8, 0.8), "yes");
+  assertEquals(decisionAnswer(0.05, 0.8), "no");
+  assertEquals(decisionAnswer(0.2, 0.8), "no");
+  assertEquals(decisionAnswer(0.5, 0.8), "unsure");
+  assertEquals(decisionAnswer(0.79, 0.8), "unsure");
+});
+
+Deno.test("buildReply in live mode blocks with Jev's yes", () => {
+  const reply = buildReply({ ...DECIDED, mode: "live", yes: 0.95 });
+  assertEquals(reply.action, "block");
+  assertEquals(reply.wouldAction, "block");
+  assertEquals(reply.route, "decision");
+  assertEquals(reply.answer, "yes");
+  assertEquals(reply.yes, 0.95);
+  assertEquals(reply.reason, "decision answered yes");
+  assertMatch(reply.text, /^Jev: yes \(95% sure\)\./);
+  assertMatch(reply.text, /llm:/);
+});
+
+Deno.test("buildReply in live mode blocks with Jev's no", () => {
+  const reply = buildReply({ ...DECIDED, mode: "live", yes: 0.1 });
+  assertEquals(reply.action, "block");
+  assertEquals(reply.answer, "no");
+  assertMatch(reply.text, /^Jev: no \(90% sure\)\./);
+});
+
+Deno.test("buildReply passes when Jev is unsure of the answer", () => {
+  const reply = buildReply({ ...DECIDED, mode: "live", yes: 0.6 });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.text, "");
+  assertEquals(reply.answer, "unsure");
+  assertEquals(reply.reason, "decision unsure");
+});
+
+Deno.test("buildReply passes when the decision step gave no answer", () => {
+  const reply = buildReply({ ...DECIDED, mode: "live", yes: null });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.answer, null);
+  assertEquals(reply.yes, null);
+  assertEquals(reply.reason, "no decision answer");
+});
+
+Deno.test("buildReply passes a decision whose text was pasted, fenced or cut", () => {
+  const reply = buildReply({
+    ...DECIDED,
+    mode: "live",
+    complete: false,
+    yes: 0.95,
+  });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.answer, null);
+  assertEquals(reply.reason, "decision text not in the turn");
+});
+
+Deno.test("buildReply ignores a yes answer on another route", () => {
+  const reply = buildReply({
+    ...DECIDED,
+    mode: "live",
+    choice: "llm",
+    yes: 0.95,
+  });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.answer, null);
+  assertEquals(reply.yes, null);
+});
+
+Deno.test("buildReply in shadow mode passes but records what live would do", () => {
+  const reply = buildReply({ ...DECIDED, mode: "shadow", yes: 0.95 });
+  assertEquals(reply.action, "pass");
+  assertEquals(reply.text, "");
+  assertEquals(reply.wouldAction, "block");
+  assertEquals(reply.answer, "yes");
+  assertEquals(reply.reason, "shadow: decision answered yes");
+});
+
 Deno.test("buildReply records the time since the hook started", () => {
   const args = {
     mode: "shadow" as const,
@@ -151,7 +239,8 @@ interface Written {
   data: Record<string, unknown>;
 }
 
-function fakeContext(written: Written[]) {
+/** A method context; `events` records log messages and writes in order. */
+function fakeContext(written: Written[], events: string[] = []) {
   return {
     globalArgs: {},
     writeResource: (
@@ -160,9 +249,10 @@ function fakeContext(written: Written[]) {
       data: Record<string, unknown>,
     ) => {
       written.push({ spec, name, data });
+      events.push(`write ${spec}`);
       return Promise.resolve({ name });
     },
-    logger: { info: () => {} },
+    logger: { info: (msg: string) => void events.push(`log ${msg}`) },
   };
 }
 
@@ -188,6 +278,60 @@ Deno.test("loadTurn marks a turn that is only pasted or code as empty", async ()
   assertEquals((await loadTurn("   ", 2000)).empty, true);
 });
 
+Deno.test("loadTurn marks a turn complete only if nothing was removed or cut", async () => {
+  assertEquals((await loadTurn("is 'x2' a good name?", 2000)).complete, true);
+  assertEquals(
+    (await loadTurn(`is this good?\n${OPEN}\nx\n${CLOSE}`, 2000)).complete,
+    false,
+  );
+  assertEquals(
+    (await loadTurn("is this good?\n```\nx\n```", 2000)).complete,
+    false,
+  );
+  assertEquals((await loadTurn("a".repeat(50), 10)).complete, false);
+});
+
+const SECRETS = [
+  "is ghp_abcdefghijklmnopqrstuvwxyz0123456789 a valid token format?",
+  "use github_pat_11ABCDEFG0abcdefghijklmnopqrstuv for this",
+  "my key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+  "AKIAIOSFODNN7EXAMPLE is that an aws key?",
+  "slack xoxb-123456789012-abcdefghijklmn",
+  "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456",
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
+  "-----BEGIN RSA PRIVATE KEY-----",
+  "password=hunter2 is that strong?",
+  "export API_TOKEN: abcd1234 ok?",
+  "email me at mark@example.com about it",
+  "is 3f2a9c1b7d4e8f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a a good id?",
+];
+
+Deno.test("looksSecret flags tokens, keys, passwords, emails and long hex", () => {
+  for (const text of SECRETS) assert(looksSecret(text), text);
+});
+
+Deno.test("looksSecret leaves ordinary questions alone", () => {
+  for (
+    const text of [
+      "is 'Add hook for routing prompts' written in the imperative mood?",
+      "list the open pull requests in puddle-works/puddleworks",
+      "is this variable name descriptive enough: 'x2'?",
+      "what is the latest published version of @swamp/aws/ec2?",
+      "should we set a password policy of 12 characters?",
+      "the commit is 6e04ffa, is the message good?",
+    ]
+  ) assert(!looksSecret(text), text);
+});
+
+Deno.test("loadTurn withholds a secret turn: placeholder text, not complete", async () => {
+  const turn = await loadTurn(SECRETS[0], 2000);
+  assertEquals(turn.withheld, true);
+  assertEquals(turn.complete, false);
+  assertEquals(turn.text, "[withheld: looks like it contains a secret]");
+  assertEquals(turn.text.includes("ghp_"), false);
+  assertEquals((await loadTurn("is 'x2' a good name?", 2000)).withheld, false);
+});
+
 Deno.test("load fails when the turn file is missing", async () => {
   await assertRejects(() =>
     model.methods.load.execute(
@@ -206,6 +350,8 @@ Deno.test("reply writes one reply resource", async () => {
       choice: "llm",
       confidence: 0.99,
       cutoff: 0.7,
+      complete: true,
+      answerCutoff: 0.8,
     },
     fakeContext(written),
   );
@@ -213,4 +359,36 @@ Deno.test("reply writes one reply resource", async () => {
   assertEquals(written[0].spec, "reply");
   assertEquals(written[0].name, "reply");
   assertEquals(written[0].data.action, "pass");
+});
+
+Deno.test("load logs before it reads the turn file", async () => {
+  const events: string[] = [];
+  await assertRejects(() =>
+    model.methods.load.execute(
+      { turnFile: "/nonexistent/puddlerouter-turn", maxChars: 2000 },
+      fakeContext([], events),
+    )
+  );
+  assertEquals(events, ["log Loading turn"]);
+});
+
+Deno.test("reply logs before and after it writes", async () => {
+  const events: string[] = [];
+  await model.methods.reply.execute(
+    {
+      mode: "shadow",
+      sourceRef: "puddlerouter:0123456789abcdef",
+      choice: "llm",
+      confidence: 0.99,
+      cutoff: 0.7,
+      complete: true,
+      answerCutoff: 0.8,
+    },
+    fakeContext([], events),
+  );
+  assertEquals(events, [
+    "log Replying for {sourceRef}",
+    "write reply",
+    "log Reply {action} for {sourceRef} ({reason})",
+  ]);
 });
