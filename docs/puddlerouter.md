@@ -8,7 +8,7 @@ changes in the design.
 |---|---|---|
 | 1 | `UserPromptSubmit` input, output and timeout | Done (Claude Code docs) |
 | 2 | Does `workflow run --input` evaluate `${{ }}` / `@file`? | Done (live) |
-| 3 | Jev `choice` route accuracy on 30 labelled turns | Pending: needs the Jev key in this repo |
+| 3 | Jev `choice` route accuracy on 30 labelled turns | Done (live): 30/30; cut-off 0.7 |
 | 4a | Can packaged workflow tags hold a regex? | Done (schema) |
 | 4b | Can `extension search` filter by label `puddlerouter-recipe`? | Done (live) |
 
@@ -70,8 +70,9 @@ Claude Code 2.1.296.
 - **A block answer is shown, not read.** `reason` reaches the user only, so a
   routed answer doesn't pollute Claude's context, and Claude has no memory of
   it on the next turn. That is the intent.
-- **Hook timeout:** set `"timeout": 20`. Swamp's start-up plus two Jev calls has
-  to fit inside it; step 1 records the real delay.
+- **Hook timeout:** set `"timeout": 20`. Swamp's start-up (1.2 s) plus Jev
+  (median 0.5 s per call, slow tail to 12 s) has to fit inside it; step 1
+  records the real delay.
 
 ## 2. Are workflow inputs evaluated?
 
@@ -113,23 +114,57 @@ Checked live with a throwaway workflow (one assert step that echoes
 
 ## 3. Jev route accuracy
 
-**Pending.** It needs `TYPESAFE_API_KEY` in this repo's `typesafe` vault and a
-`jev` model instance here.
+Run 2026-10-13 with the `puddlerouter-route-eval` workflow over
+[`route-eval/turns.yaml`](route-eval/turns.yaml) (30 turns, 10 per route). Jev
+is `jev-1.13-free` at `https://opencode.ai/zen` (OpenCode's free tier), the
+same settings as `~/dev/puddleworks-apps`. Run `fa02dfbc`.
 
-The labelled set is ready: [`route-eval/turns.yaml`](route-eval/turns.yaml), 30
-turns, 10 per route. The run asks Jev the same question the router will ask:
+```sh
+swamp workflow run puddlerouter-route-eval --input-file docs/route-eval/turns.yaml
+swamp data query 'workflowRunId == latestRun("puddlerouter-route-eval") && modelName == "jev"' --select content --json
+```
+
+The question Jev is asked (kept identical in `puddlerouter.yaml`):
 
 - `state`: the turn text
-- `instructions`: "Route this request typed into a coding assistant. deterministic: a program could answer it exactly by calling an API or CLI, with no judgement. decision: it asks for a yes/no judgement about text given in the request. llm: anything else, such as writing, changing or explaining code."
-- `criteria`: `deterministic`, `decision`, `llm`, each with the description above
+- `instructions`: "Route this request typed into a coding assistant. Pick deterministic only if a program could answer it exactly by calling an API or CLI, with no judgement. Pick decision only if it asks for a yes/no judgement about text given in the request. Pick llm for anything else, such as writing, changing, reviewing or explaining code."
+- `criteria`: `deterministic`, `decision`, `llm`, each with a one-line description
 
-Accuracy is scored at cut-offs 0.5, 0.6, 0.7, 0.8 and 0.9. A turn below the
-cut-off counts as `llm`. The cut-off chosen is the lowest one where **no**
-`llm` turn is routed elsewhere: a wrong `llm` → `deterministic` or `decision`
-costs the user a turn, while a wrong route → `llm` only costs Claude tokens.
+**Result:** Jev's top choice was right for all 30 turns. A turn whose
+`confidence` is below the cut-off is treated as `llm`:
 
-**Threshold until the run:** 0.7, as in the plan. The router is in shadow mode
-for steps 1 to 4, so the cut-off only decides what is logged.
+| Cut-off | Correct | deterministic | decision | llm | `llm` sent elsewhere |
+|---|---|---|---|---|---|
+| ≤ 0.6 | 30/30 | 10 | 10 | 10 | 0 |
+| 0.7 | 29/30 | 9 | 10 | 10 | 0 |
+| 0.8 | 29/30 | 9 | 10 | 10 | 0 |
+| 0.9 | 28/30 | 8 | 10 | 10 | 0 |
+
+The low-confidence turns were:
+
+| Turn | Label | Jev | Confidence | Probabilities |
+|---|---|---|---|---|
+| t30 "summarise what changed in the last week across puddle-works repos…" | llm | llm | 0.48 | llm 0.65, deterministic 0.35 |
+| t06 "which swamp extensions have the label github?" | deterministic | deterministic | 0.64 | deterministic 0.76, llm 0.21 |
+| t09 "what's the current status of the mted19 server?" | deterministic | deterministic | 0.86 | deterministic 0.91, llm 0.09 |
+
+All the others were at 0.95 or above.
+
+**Cut-off chosen: 0.7.** No `llm` turn is misrouted at any cut-off, but t30 is
+an `llm` turn with 35% on `deterministic`, so a different summary-style prompt
+could cross over. 0.7 keeps a margin and costs one borderline deterministic
+turn (t06), which then just goes to Claude. The set was written by hand and is
+cleaner than real prompts, so step 1's week of real turns decides the final
+value. In shadow mode the cut-off only changes what is logged.
+
+**Delay per `choice` call:** median 0.49 s, but 4 of 30 took 4.7–11.8 s
+(three calls ran at a time against the free tier). With swamp's 1.2 s start-up,
+a typical routed turn costs about 2 s. The slow tail is why the hook has a
+20 s timeout and fails open.
+
+**Aside:** the `@swamp/typesafe-ai` `models` method fails against OpenCode,
+which returns an OpenAI-style `{object, data}` list rather than `{models}`. The
+router doesn't use that method.
 
 ## 4. Recipe packs in the registry
 
