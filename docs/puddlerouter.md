@@ -421,9 +421,51 @@ Live mode, run in this repo with the hook
 | "is 'utilise' plain English, yes or no?" | none | decision unsure (yes 0.25) | 2,001 |
 | "is this a good commit message?" + a pasted block | none | decision text not in the turn | 1,252 |
 | "refactor the reply method so the hint text comes from a template" | none | llm route | 1,367 |
-| "list the open pull requests in puddle-works/puddleworks" | none | deterministic route not built yet | 1,337 |
+| "list the open pull requests in puddle-works/puddleworks" | none | no extension found (no allowlisted candidate) | n/a |
 | "is this variable name descriptive enough: 'x2'?" (shadow) | none | shadow: decision answered no, `wouldAction` block | 1,800 |
 
 A decision turn costs about 0.5 s more than other turns (the second Jev call).
 Live mode then reads the reply (about 1.2 s), so a blocked decision appears
 about 3 s after the prompt is sent, inside the hook's 20 s timeout.
+
+## Step 3: deterministic route
+
+A turn Jev routes to `deterministic` (at 0.7 or more) is answered by a program,
+not Claude, in one of three ways.
+
+1. **Recipe.** `match` tries the built-in recipes in
+   `extensions/models/_lib/recipes.ts`: a regex that must match the whole turn,
+   the read-only method it runs, and how the data is shown as text. The first
+   recipes use `@swamp/git` (no credentials): `git status`, `git log` (with
+   "last N commits", N up to 99) and `git branch`. The regex captures digits
+   only; they become method inputs run with `--literal-inputs`, so turn text
+   never reaches swamp as input. `execute` runs
+   `swamp behavior run @swamp/git <method> git --repo-dir <runtime repo>`, pulls
+   the extension once if it is missing, and stores `result`. Live mode blocks
+   with the answer and the `llm:` footer. A failed recipe passes.
+2. **Extension hint.** With no recipe, `match` searches the local types and the
+   registry (`swamp model type search`, `swamp extension search`, on the turn's
+   content words, never the whole turn), keeps only `@swamp/*` and `@mesgme/*`
+   (the allowlist), and Jev's `pick` step chooses one (or none) from up to three.
+   A pick at or above the cut-off adds a hint telling Claude which extension to
+   describe and use, and to ask the user about a "recipe wanted" issue (step 4
+   will raise it).
+3. **Nothing found.** The turn passes to Claude (`no extension found`).
+
+Recipes run in the Claude session's working directory, because the hook's swamp
+inherits it and `@swamp/git`'s `repoPath "."` resolves there. Shadow mode runs
+all of this and records it in `reply.recipe`, `reply.extension` and
+`wouldAction`; it still never blocks.
+
+Run in live mode from `~/dev/swamplab` (a git repo) with this repo as the
+runtime:
+
+| Turn | Hook output | `reply.reason` | `elapsedMs` |
+|---|---|---|---|
+| "git status" | block, "1 changed file: ?? swamp/" | recipe git-status answered | 2,651 |
+| "show me the last 3 commits" | block, three commits | recipe git-log answered | 2,480 |
+| "what branch am I on" | block, "On branch main. Other branches: …" | recipe git-branch answered | 2,580 |
+| "list the hetzner servers in my account" | hint (a hint naming an extension; third-party ones are now filtered out) | extension …, no recipe | 4,760 |
+
+Not yet built: recipes from the local `recipes.yaml` and registry packs (step 6)
+and GitHub recipes (waiting on a decision about `@webframp/github`).

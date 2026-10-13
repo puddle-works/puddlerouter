@@ -157,7 +157,7 @@ Deno.test("shadow mode runs the workflow with only the turn file's path", async 
   const call = run.calls[0];
   assertMatch(
     call,
-    /^workflow run @puddleworks\/puddlerouter --repo-dir \S+ --input turnFile=\/\S+ --input mode=shadow --input hookStartedAt=\d{13}$/,
+    /^workflow run @puddleworks\/puddlerouter --repo-dir \S+ --input turnFile=\/\S+ --input mode=shadow --input hookStartedAt=\d{13} --input repoDir=\S+$/,
   );
   assert(
     !call.includes("fix stuff"),
@@ -217,7 +217,7 @@ Deno.test("live mode turns a block reply into a block decision", async () => {
   assertEquals(run.calls.length, 2);
   assertMatch(
     run.calls[0],
-    / --input mode=live --input hookStartedAt=\d{13} --json$/,
+    / --input mode=live --input hookStartedAt=\d{13} --input repoDir=\S+ --json$/,
   );
   assertEquals(
     run.calls[1],
@@ -282,4 +282,11 @@ Deno.test("fails open when swamp is not installed", async () => {
   });
   assertSilentPass(run);
   assertEquals(run.stderr, "");
+});
+
+Deno.test("the hook tells the workflow which repo recipes pull extensions into", async () => {
+  const run = await runHook("git status", {}, { waitForSwamp: true });
+  assertEquals(run.code, 0);
+  assertMatch(run.calls[0], /--input repoDir=\S+/);
+  assertMatch(run.calls[0], /--repo-dir (\S+) .*--input repoDir=\1(\s|$)/);
 });

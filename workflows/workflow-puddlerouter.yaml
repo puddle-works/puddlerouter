@@ -3,9 +3,10 @@ name: "@puddleworks/puddlerouter"
 description: >-
   Route one turn typed into Claude Code. The hook writes the turn to a temp
   file and passes only its path. load cleans and hashes the text, Jev picks a
-  route, Jev answers the yes/no question on the decision route, and reply
-  stores what the hook should do. In live mode a confident answer blocks the
-  turn with Jev's answer. In shadow mode the reply always passes, so the run
+  route, Jev answers the yes/no question on the decision route, on the
+  deterministic route a built-in recipe runs or Jev picks an extension that
+  search found, and reply stores what the hook should do. In live mode a
+  confident answer blocks the turn with Jev's or the recipe's answer. In shadow mode the reply always passes, so the run
   is a log of what live mode would do. The route question must stay the same
   as in puddlerouter-route-eval, and the decision question as in
   puddlerouter-decision-eval.
@@ -38,10 +39,14 @@ inputs:
       type: number
       default: 0
       description: When the hook started, in ms since the epoch; reply records the time since.
+    repoDir:
+      type: string
+      default: "."
+      description: The swamp repo a recipe's extension is pulled into.
   required: [turnFile]
 jobs:
   - name: main
-    description: load, route, decide, reply.
+    description: load, route, decide, match, pick, execute, reply.
     dependsOn: []
     weight: 0
     steps:
@@ -115,6 +120,70 @@ jobs:
               the text given in it.
             yes: The answer to the question is yes.
             no: The answer to the question is no.
+      - name: match
+        description: >-
+          Match a deterministic turn to a built-in recipe, else search for
+          extensions. Skipped unless the route is deterministic at or above
+          the cut-off.
+        dependsOn:
+          - step: route
+            condition:
+              type: always
+        weight: 0
+        allowFailure: true
+        guard: >-
+          ${{ !(has(steps.route) && has(steps.route.outputs) &&
+          steps.route.outputs.choice == "deterministic" &&
+          steps.route.outputs.confidence >= inputs.cutoff) }}
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: match
+          inputs:
+            text: ${{ steps.load.outputs.text }}
+      - name: pick
+        description: >-
+          Ask Jev which extension search found, if any, can answer the turn.
+          Skipped unless match found candidates.
+        dependsOn:
+          - step: match
+            condition:
+              type: always
+        weight: 0
+        allowFailure: true
+        guard: >-
+          ${{ !(has(steps.match) && has(steps.match.outputs) &&
+          steps.match.outputs.kind == "candidates") }}
+        task:
+          type: model_method
+          modelIdOrName: jev
+          methodName: choice
+          inputs:
+            name: pick
+            state: ${{ steps.load.outputs.text }}
+            instructions: >-
+              Pick the extension that can answer this request exactly by
+              calling an API or CLI. Pick none if no candidate can.
+            criteria: ${{ steps.match.outputs.criteria }}
+      - name: execute
+        description: Run the matched recipe. Skipped unless match found a recipe.
+        dependsOn:
+          - step: match
+            condition:
+              type: always
+        weight: 0
+        allowFailure: true
+        guard: >-
+          ${{ !(has(steps.match) && has(steps.match.outputs) &&
+          steps.match.outputs.kind == "recipe") }}
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: execute
+          inputs:
+            recipeId: ${{ steps.match.outputs.recipeId }}
+            captures: ${{ steps.match.outputs.captures }}
+            repoDir: ${{ inputs.repoDir }}
       - name: reply
         description: Store what the hook should do. Runs whether or not Jev answered.
         dependsOn:
@@ -125,6 +194,12 @@ jobs:
             condition:
               type: always
           - step: decide
+            condition:
+              type: always
+          - step: pick
+            condition:
+              type: always
+          - step: execute
             condition:
               type: always
         weight: 0
@@ -143,3 +218,10 @@ jobs:
             choice: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.choice : "" }}'
             confidence: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.confidence : 0.0 }}'
             yes: '${{ has(steps.decide) && has(steps.decide.outputs) ? steps.decide.outputs.noul : null }}'
+            matchKind: '${{ has(steps.match) && has(steps.match.outputs) ? steps.match.outputs.kind : "none" }}'
+            recipeId: '${{ has(steps.match) && has(steps.match.outputs) ? steps.match.outputs.recipeId : "" }}'
+            candidates: '${{ has(steps.match) && has(steps.match.outputs) ? steps.match.outputs.candidates : [] }}'
+            resultOk: '${{ has(steps.execute) && has(steps.execute.outputs) ? steps.execute.outputs.ok : false }}'
+            resultText: '${{ has(steps.execute) && has(steps.execute.outputs) ? steps.execute.outputs.text : "" }}'
+            pickChoice: '${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.choice : "" }}'
+            pickConfidence: '${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.confidence : 0.0 }}'

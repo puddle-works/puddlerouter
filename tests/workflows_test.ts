@@ -94,6 +94,42 @@ Deno.test("reply runs after decide whatever happened and gets its answer", async
   assert(inputs.answerCutoff.includes("inputs.answerCutoff"));
 });
 
+Deno.test("match, pick and execute only run for the deterministic route and its match", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  const guards: Record<string, string[]> = {
+    match: [
+      'steps.route.outputs.choice == "deterministic"',
+      "steps.route.outputs.confidence >= inputs.cutoff",
+    ],
+    pick: ['steps.match.outputs.kind == "candidates"'],
+    execute: ['steps.match.outputs.kind == "recipe"'],
+  };
+  for (const [name, parts] of Object.entries(guards)) {
+    const step = await stepOf(wf, name);
+    assertEquals(step.allowFailure, true, name);
+    for (const part of parts) {
+      assert((step.guard ?? "").includes(part), `${name} guard lacks ${part}`);
+    }
+  }
+});
+
+Deno.test("reply waits for pick and execute and gets their results", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "reply");
+  for (const name of ["match", "pick", "execute"]) {
+    assert(
+      name === "match" ||
+        step.dependsOn?.some((d) =>
+          d.step === name && d.condition.type === "always"
+        ),
+      name,
+    );
+  }
+  const inputs = step.task.inputs as Record<string, string>;
+  assert(inputs.resultText.includes("steps.execute.outputs.text"));
+  assert(inputs.pickChoice.includes("steps.pick.outputs.choice"));
+  assert(inputs.matchKind.includes("steps.match.outputs.kind"));
+});
+
 async function readYaml(path: string) {
   return parse(await Deno.readTextFile(new URL(`../${path}`, import.meta.url)));
 }
