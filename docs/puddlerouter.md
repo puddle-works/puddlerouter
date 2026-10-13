@@ -585,3 +585,12 @@ terminal, so `sync` passes it.
   `errors` and the rest still loads.
 - A pack name must pass the allowlist like an extension name, so a stranger's
   pack labelled `puddlerouter-recipe` is never pulled.
+
+### Live hook check (2026-10-13)
+
+With the Jev key in this repo's `typesafe` vault, the turn `open prs in
+puddle-works/puddlerouter` went through `hooks/puddlerouter.sh` (shadow mode).
+The `reply` data: `route` deterministic, `recipe` `github-open-prs`, no pick,
+no search, not cached, confidence 0.92, `elapsedMs` 3148, `action` pass
+(`wouldAction` block). The reply was readable about 10 s after the hook was
+started.
