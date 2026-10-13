@@ -1,4 +1,9 @@
-# puddlerouter: step 0 checks
+# puddlerouter: findings by step
+
+- [Step 0: checks](#step-0-checks)
+- [Step 1: shadow mode](#step-1-shadow-mode)
+
+## Step 0: checks
 
 Step 0 of the plan checks the assumptions the router rests on before any code
 is written. Each check says what was found, how it was found, and what it
@@ -12,7 +17,7 @@ changes in the design.
 | 4a | Can packaged workflow tags hold a regex? | Done (schema) |
 | 4b | Can `extension search` filter by label `puddlerouter-recipe`? | Done (live) |
 
-## 1. The `UserPromptSubmit` hook
+### 1. The `UserPromptSubmit` hook
 
 Source: <https://code.claude.com/docs/en/hooks>, read 2026-10-13 against
 Claude Code 2.1.296.
@@ -74,7 +79,7 @@ Claude Code 2.1.296.
   (median 0.5 s per call, slow tail to 12 s) has to fit inside it; step 1
   records the real delay.
 
-## 2. Are workflow inputs evaluated?
+### 2. Are workflow inputs evaluated?
 
 Checked live with a throwaway workflow (one assert step that echoes
 `inputs.x`), swamp 20261013.025835.0, and against the swamp skill's
@@ -112,7 +117,7 @@ Checked live with a throwaway workflow (one assert step that echoes
 - `execute` must always call `swamp model … method run … --literal-inputs`,
   because recipe captures come from the prompt.
 
-## 3. Jev route accuracy
+### 3. Jev route accuracy
 
 Run 2026-10-13 with the `puddlerouter-route-eval` workflow over
 [`route-eval/turns.yaml`](route-eval/turns.yaml) (30 turns, 10 per route). Jev
@@ -124,7 +129,7 @@ swamp workflow run puddlerouter-route-eval --input-file docs/route-eval/turns.ya
 swamp data query 'workflowRunId == latestRun("puddlerouter-route-eval") && modelName == "jev"' --select content --json
 ```
 
-The question Jev is asked (kept identical in `puddlerouter.yaml`):
+The question Jev is asked (kept identical in `workflow-puddlerouter.yaml`):
 
 - `state`: the turn text
 - `instructions`: "Route this request typed into a coding assistant. Pick deterministic only if a program could answer it exactly by calling an API or CLI, with no judgement. Pick decision only if it asks for a yes/no judgement about text given in the request. Pick llm for anything else, such as writing, changing, reviewing or explaining code."
@@ -166,7 +171,7 @@ a typical routed turn costs about 2 s. The slow tail is why the hook has a
 which returns an OpenAI-style `{object, data}` list rather than `{models}`. The
 router doesn't use that method.
 
-## 4. Recipe packs in the registry
+### 4. Recipe packs in the registry
 
 **4a. Tags can hold a regex.** `swamp workflow schema get` gives `tags` as
 `{ type: object, additionalProperties: { type: string } }`. A regex is a
@@ -190,7 +195,7 @@ Manifests carry `labels:` and `workflows:` (see `@mesgme/control-plane` in
 `labels: [puddlerouter-recipe]` and one workflow per recipe.
 `--content-type workflows` narrows it further.
 
-## Repo setup
+### Repo setup
 
 The repo was created from the template without step 5 of the template README
 (`swamp repo init --force --tool claude`). Without it the repo had the
@@ -200,3 +205,70 @@ auto-mode classifier refused swamp commands that change the repo
 `swamp repo init --force --tool claude`, those commands ran. The new `repoId`,
 the refreshed managed section of `CLAUDE.md` and the `vaults/` definitions
 (no secrets) are committed with this step.
+
+## Step 1: shadow mode
+
+Built in step 1: `load` and `reply` in `extensions/models/puddlerouter.ts`,
+the `@mesgme/puddlerouter` workflow (load → route → reply) and
+`hooks/puddlerouter.sh`. The [README](../README.md) has the set-up and the
+queries that read the log.
+
+### Decisions
+
+- **Shadow runs in the background.** In shadow mode the hook starts the
+  workflow detached and exits at once (31 ms measured), so a week of shadow
+  data costs no delay per turn. Live mode waits for the run, then reads its
+  `reply` with `swamp workflow history outputs` (about 1.2 s more); `swamp
+  workflow run --json` does not include step data. The mode is set in one
+  place, the hook (`PUDDLEROUTER_MODE`, default `shadow`), which passes it
+  to the workflow. In step 1 `reply` always passes; from step 2 it must still
+  pass whenever the mode is `shadow`.
+- **Delay is measured from the hook.** The hook passes `hookStartedAt` (ms,
+  from `jq now`) and `reply` stores `elapsedMs`. This covers swamp's start-up,
+  `load`, Jev and `reply`, which is the delay a live turn waits for apart from
+  reading the reply. A run's own `duration` in `workflow history` leaves out
+  swamp's start-up. First live runs: 1.0–1.4 s.
+- **Retention.** `turn` and `reply` keep 14 days (not 7) and up to 2,000
+  versions, so a week of turns is still there when it is reviewed. Jev's
+  `choice` data is stored by `@swamp/typesafe-ai` with no expiry, so the
+  route step always uses the name `route`: only the last 20 versions, and so
+  only the last 20 turns' text, are kept there.
+- **Skips.** Besides the plan's skips the hook also skips turns starting with
+  `!` (Claude Code's shell mode), and a turn that is only pasted text or code
+  is stored with `empty: true` and not sent to Jev.
+- **Workflow name.** The publish quality gate requires every workflow in the
+  extension to use the extension's collective, so the workflow is
+  `@mesgme/puddlerouter`, not `puddlerouter`.
+- **Fail open.** The route step has `allowFailure`, and `reply` runs whether
+  or not Jev answered (`dependsOn … condition: always`); a skipped or failed
+  route is recorded as `llm` with reason `no route answer`. `steps.route` is
+  absent when the step was skipped, so the reply inputs test
+  `has(steps.route) && has(steps.route.outputs)` first.
+- **Same question as the eval.** `tests/workflows_test.ts` fails if the route
+  instructions or criteria differ from `puddlerouter-route-eval`.
+
+### Publishing
+
+`make publish VISIBILITY=private DRY_RUN=1` passes the tests, `deno check`,
+formatting and quality (85%; the missing 15% is a verified public
+repository), then stops at the dry-run push: the `@mesgme` collective is on
+swamp's Free plan, which cannot publish privately. The router does not need
+publishing to run (the runtime repo is a clone of this one). The CI publish job
+also fails because the repo has no `SWAMP_API_KEY` / `SWAMP_SIGNIN_TOKEN`
+secrets.
+
+### A week of real turns
+
+To fill in after a week of shadow mode, with the queries in the README. Label
+a sample of turns by hand (as in `route-eval/turns.yaml`) and score Jev at the
+0.7 cut-off.
+
+| Measure | Value |
+|---|---|
+| Dates | |
+| Turns routed | |
+| Routes (deterministic / decision / llm) | |
+| Accuracy on the labelled sample | |
+| `llm` turns sent elsewhere | |
+| Delay, median / 95th percentile (`elapsedMs`) | |
+| Turns that are not typed (scheduled tasks, agent reports) | |

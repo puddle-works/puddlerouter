@@ -1,0 +1,104 @@
+id: 9366b226-da00-46dc-9a1c-1e6ad0d4c39d
+name: "@mesgme/puddlerouter"
+description: >-
+  Route one turn typed into Claude Code. The hook writes the turn to a temp
+  file and passes only its path. load cleans and hashes the text, Jev picks a
+  route, and reply stores what the hook should do. In shadow mode (step 1)
+  the reply always passes, so the run is a log of the route Jev would take.
+  The route instructions and criteria must stay the same as in
+  puddlerouter-route-eval.
+version: 1
+tags:
+  maxReruns: "3"
+  maxWallClock: "1m"
+inputs:
+  type: object
+  properties:
+    turnFile:
+      type: string
+      description: Path of the temp file holding the turn text.
+    mode:
+      type: string
+      enum: [shadow, live]
+      default: shadow
+      description: shadow logs the route and always passes; live acts on it.
+    cutoff:
+      type: number
+      default: 0.7
+      description: Below this confidence the route is llm.
+    hookStartedAt:
+      type: number
+      default: 0
+      description: When the hook started, in ms since the epoch; reply records the time since.
+  required: [turnFile]
+jobs:
+  - name: main
+    description: load, route, reply.
+    dependsOn: []
+    weight: 0
+    steps:
+      - name: load
+        description: Read the turn file; store the cleaned text as turn.
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: load
+          inputs:
+            turnFile: ${{ inputs.turnFile }}
+      - name: route
+        description: Ask Jev which route the turn should take. Skipped for an empty turn.
+        dependsOn:
+          - step: load
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: true
+        guard: ${{ steps.load.outputs.empty }}
+        task:
+          type: model_method
+          modelIdOrName: jev
+          methodName: choice
+          inputs:
+            name: route
+            state: ${{ steps.load.outputs.text }}
+            instructions: >-
+              Route this request typed into a coding assistant. Pick
+              deterministic only if a program could answer it exactly by
+              calling an API or CLI, with no judgement. Pick decision only if
+              it asks for a yes/no judgement about text given in the request.
+              Pick llm for anything else, such as writing, changing, reviewing
+              or explaining code.
+            criteria:
+              deterministic: >-
+                A program could answer it exactly by calling an API or CLI,
+                with no judgement (list, count, look up, show status).
+              decision: >-
+                It asks for a yes/no judgement about text given in the request.
+              llm: >-
+                Anything else: writing, changing, reviewing, planning or
+                explaining code or documents.
+      - name: reply
+        description: Store what the hook should do. Runs whether or not Jev answered.
+        dependsOn:
+          - step: load
+            condition:
+              type: succeeded
+          - step: route
+            condition:
+              type: always
+        weight: 0
+        allowFailure: false
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: reply
+          inputs:
+            mode: ${{ inputs.mode }}
+            cutoff: ${{ inputs.cutoff }}
+            hookStartedAt: ${{ inputs.hookStartedAt }}
+            sourceRef: ${{ steps.load.outputs.sourceRef }}
+            choice: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.choice : "" }}'
+            confidence: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.confidence : 0.0 }}'

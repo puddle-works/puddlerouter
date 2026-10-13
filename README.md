@@ -1,53 +1,97 @@
-# puddle-template
+# puddlerouter
 
-Template for a puddle repo ([ADR-004][adr]): one repo per puddle, created from
-this one. A repo made from it passes `make test` and a publish dry run before
-anything is written.
+`@mesgme/puddlerouter` checks each turn typed into Claude Code before Claude
+spends effort on it. A `UserPromptSubmit` hook hands the turn to a swamp
+workflow, and Jev (TypeSafe's System One model) picks a route:
 
-## What is in it
+| Route | Meaning | What happens (once built) |
+|---|---|---|
+| `deterministic` | A program could answer it exactly through an API or CLI | A swamp extension runs and its answer is shown |
+| `decision` | A yes/no judgement about text in the turn | Jev answers it |
+| `llm` | Anything else, or Jev is unsure | Claude runs as normal |
 
-| Path | What it is |
-|---|---|
-| `.swamp.yaml`, `.gitignore`, `CLAUDE.md` | Swamp repo files from `swamp repo init` |
-| `extensions/models/` | The puddle's extension and its tests. Ships with a placeholder `example.ts` |
-| `workflows/` | Swamp workflows. Every one needs `maxReruns` and `maxWallClock` tags |
-| `manifest.yaml` | The extension's publish manifest (placeholder; `models:` lists bare file names) |
-| `contracts.ts` | Maps model instances that workflows read to the data they write |
-| `Makefile`, `puddle.mk` | `make test`, `contracts-check`, `guardrails-check`, `publish` |
-| `.github/workflows/ci.yml` | Tests plus the reusable checks and publish dry run from [puddle-tooling][tooling] |
-| `optional/launcher/` | Containerfile skeleton for a puddle that ships a launcher |
+**Status: shadow mode (step 1).** The hook logs the route Jev would take and
+never blocks: Claude always runs. Routes act from step 5, after a week of
+shadow data. See [`docs/puddlerouter.md`](docs/puddlerouter.md) for the plan
+and the step 0 findings.
 
-## Make a puddle from it
+## How a turn flows
 
-Click **Use this template** on GitHub, or:
-
-```sh
-gh repo create puddle-works/<slug> --template puddle-works/puddle-template --private
+```
+prompt ─▶ hooks/puddlerouter.sh
+           skips /commands, ! shell turns, "llm:" prefix, turns starting
+           with "<", turns over 2,000 characters, PUDDLEROUTER=off
+           writes the turn to a mktemp file; passes only its path
+        ─▶ swamp workflow run @mesgme/puddlerouter --input turnFile=<path>
+             load   strip pasted and fenced blocks, cap, hash (sourceRef) → turn
+             route  jev.choice over deterministic / decision / llm (cut-off 0.7)
+             reply  {action: block|hint|pass, text} → reply
 ```
 
-Then replace the placeholders:
+The hook fails open: any error, timeout or missing tool lets Claude run, with
+no output and exit 0.
 
-1. Rename the extension in `manifest.yaml`, `extensions/models/` and `contracts.ts`
-   (delete `example.ts`, its test and `workflows/example.yaml` once yours exist).
-2. Rewrite this README and the puddle section of `CLAUDE.md`.
-3. Set `visibility:` in `manifest.yaml` (and `visibility:` in `ci.yml`). The repo's
-   visibility follows the extension's.
-4. Add the `SWAMP_API_KEY` and `SWAMP_SIGNIN_TOKEN` repository secrets (see
-   [puddle-tooling][tooling]) so the publish dry run can run.
-5. Run `swamp repo init --force --tool claude` so the repo gets its own `repoId`.
+## Set up
 
-## Checks
+The runtime repo is the clone at `~/dev/puddlerouter`.
 
 ```sh
+cd ~/dev/puddlerouter
+swamp extension install                          # @swamp/typesafe-ai, pinned
+swamp vault put typesafe TYPESAFE_API_KEY        # the Jev key
 make test
+```
+
+Then add the hook to `~/.claude/settings.json` under
+`hooks.UserPromptSubmit`:
+
+```json
+{
+  "hooks": [
+    {
+      "type": "command",
+      "command": "bash \"$HOME/dev/puddlerouter/hooks/puddlerouter.sh\"",
+      "timeout": 20
+    }
+  ]
+}
+```
+
+Hook settings (environment): `PUDDLEROUTER=off` skips every turn;
+`PUDDLEROUTER_MODE=shadow|live` (default `shadow`);
+`PUDDLEROUTER_REPO` (default `~/dev/puddlerouter`);
+`PUDDLEROUTER_TIMEOUT` seconds for live mode (default 15). Start a turn with
+`llm:` to skip the router for that turn.
+
+## Read the shadow log
+
+Every routed turn is a run of `@mesgme/puddlerouter`, with a `turn` and a
+`reply` resource kept for 14 days.
+
+```sh
+# Each turn: when, text, route, Jev's choice and confidence, delay in ms
+swamp data query 'modelName == "puddlerouter" && version >= 0 && workflowName == "@mesgme/puddlerouter"' --json \
+  | jq -c '[.results[] | {run: .workflowRunId, name, content}] | group_by(.run)[]
+      | (map({(.name): .content}) | add) as $d | select($d.reply)
+      | {at: $d.reply.repliedAt, text: $d.turn.text, route: $d.reply.route,
+         choice: $d.reply.choice, confidence: $d.reply.confidence, ms: $d.reply.elapsedMs}'
+
+# Totals: turns per route, median and 95th percentile delay
+swamp data query 'modelName == "puddlerouter" && name == "reply" && version >= 0' --select content --json \
+  | jq -c '[.results[] | .content // .] | {turns: length,
+      routes: (group_by(.route) | map({(.[0].route): length}) | add),
+      ms: ([.[].elapsedMs | numbers] | sort
+           | {median: .[length/2|floor], p95: .[(length*0.95)|floor]})}'
+```
+
+`elapsedMs` runs from the hook starting to the reply being stored. In live
+mode the hook then reads the reply, which adds about 1.2 s.
+
+## Develop
+
+```sh
+make test                                   # extension and hook tests
 make contracts-check
 make guardrails-check
 make publish VISIBILITY=private DRY_RUN=1   # stops after the dry run
 ```
-
-`puddle.mk` fetches the checks from the puddle-tooling release named by
-`TOOLING_REF` (default `v0.1.1`). Move to a newer release by changing it there
-and the `@vX.Y.Z` and `tooling-ref` in `ci.yml` together.
-
-[adr]: https://github.com/puddle-works/puddleworks-apps/blob/main/docs/adr/ADR-004-one-repo-per-puddle.md
-[tooling]: https://github.com/puddle-works/puddle-tooling

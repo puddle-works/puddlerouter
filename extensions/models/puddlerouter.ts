@@ -1,0 +1,270 @@
+/**
+ * @mesgme/puddlerouter — decides what happens to a turn typed into Claude Code
+ *
+ * The `puddlerouter` workflow runs these methods for each turn the hook hands
+ * over: `load` reads the turn file and stores the cleaned text, Jev picks a
+ * route, and `reply` turns the route into what the hook should do.
+ *
+ * Step 1 is shadow mode: every route is logged and the reply always passes,
+ * so Claude runs as normal.
+ *
+ * Output: a `turn` resource (the cleaned text and its `sourceRef`) and a
+ * `reply` resource (`{action, text}` plus the route it came from).
+ *
+ * @module
+ */
+import { z } from "npm:zod@4";
+
+/** The routes Jev picks between. */
+export const ROUTES = ["deterministic", "decision", "llm"] as const;
+/** One route. */
+export type Route = typeof ROUTES[number];
+
+/** The model takes no settings. */
+export const GlobalArgsSchema = z.object({});
+/** The settings of one model instance (none). */
+export type GlobalArgs = z.infer<typeof GlobalArgsSchema>;
+
+/** Arguments for `load`. */
+export const LoadArgsSchema = z.object({
+  turnFile: z.string().min(1).describe(
+    "Path of the file holding the turn text. The hook writes it with mktemp.",
+  ),
+  maxChars: z.number().int().positive().default(2000).describe(
+    "Longest cleaned text kept; the rest is cut off.",
+  ),
+});
+/** The arguments `load` accepts. */
+export type LoadArgs = z.infer<typeof LoadArgsSchema>;
+
+/** What `load` stores. */
+export const TurnSchema = z.object({
+  /** The turn with pasted and fenced blocks replaced, trimmed and capped. */
+  text: z.string(),
+  /** `puddlerouter:` and 16 hex characters of the normalised text's hash. */
+  sourceRef: z.string(),
+  /** True when nothing is left after cleaning; the route step is skipped. */
+  empty: z.boolean(),
+  /** Pasted blocks replaced. */
+  pasted: z.number().int(),
+  /** Fenced code blocks replaced. */
+  fenced: z.number().int(),
+  /** True when the text was cut at `maxChars`. */
+  truncated: z.boolean(),
+  loadedAt: z.iso.datetime(),
+});
+/** The stored turn. */
+export type Turn = z.infer<typeof TurnSchema>;
+
+/** Arguments for `reply`. */
+export const ReplyArgsSchema = z.object({
+  mode: z.enum(["shadow", "live"]).default("shadow").describe(
+    "shadow logs the route and always passes; live acts on it.",
+  ),
+  sourceRef: z.string().describe("The turn's sourceRef."),
+  choice: z.string().optional().describe(
+    "Jev's route; empty or missing when the route step did not answer.",
+  ),
+  confidence: z.number().optional().describe("Jev's confidence in `choice`."),
+  cutoff: z.number().min(0).max(1).default(0.7).describe(
+    "Below this confidence the route is llm.",
+  ),
+  hookStartedAt: z.number().optional().describe(
+    "When the hook started, in ms since the epoch; 0 or missing if unknown.",
+  ),
+});
+/** The arguments `reply` accepts. */
+export type ReplyArgs = z.infer<typeof ReplyArgsSchema>;
+
+/** What `reply` stores, and what the hook reads. */
+export const ReplySchema = z.object({
+  /** block: answer instead of Claude; hint: add context; pass: do nothing. */
+  action: z.enum(["block", "hint", "pass"]),
+  /** The answer (block) or the context (hint). Empty for pass. */
+  text: z.string(),
+  mode: z.enum(["shadow", "live"]),
+  /** The route taken after the cut-off. */
+  route: z.enum(ROUTES),
+  /** Jev's own choice, before the cut-off; empty if it gave none. */
+  choice: z.string(),
+  confidence: z.number().nullable(),
+  cutoff: z.number(),
+  sourceRef: z.string(),
+  /** Why the action was chosen. */
+  reason: z.string(),
+  /** Milliseconds from the hook starting to this reply; null if unknown. */
+  elapsedMs: z.number().nullable(),
+  repliedAt: z.iso.datetime(),
+});
+/** The stored reply. */
+export type Reply = z.infer<typeof ReplySchema>;
+
+/** Lowercase, trim and collapse whitespace, so trivial edits hash the same. */
+export function normalise(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+const PASTED =
+  /<pasted_content id="[^"]*">[\s\S]*?(?:<\/pasted_content id="[^"]*">|$)/g;
+const FENCED = /^(```|~~~)[^\n]*\n[\s\S]*?(?:^\1[ \t]*$|(?![\s\S]))/gm;
+
+/** The turn text without pasted or fenced blocks, trimmed and capped. */
+export function cleanTurn(
+  raw: string,
+  maxChars: number,
+): { text: string; pasted: number; fenced: number; truncated: boolean } {
+  let pasted = 0;
+  let fenced = 0;
+  const text = raw
+    .replace(PASTED, () => {
+      pasted++;
+      return "[pasted text]";
+    })
+    .replace(FENCED, () => {
+      fenced++;
+      return "[code block]";
+    })
+    .trim();
+  const truncated = text.length > maxChars;
+  return {
+    text: truncated ? text.slice(0, maxChars) : text,
+    pasted,
+    fenced,
+    truncated,
+  };
+}
+
+/** `puddlerouter:<hash>`, the same for the same normalised text. */
+export async function sourceRef(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(normalise(text)),
+  );
+  const hex = [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `puddlerouter:${hex.slice(0, 16)}`;
+}
+
+const ONLY_PLACEHOLDERS = /^(\[(pasted text|code block)\]\s*)*$/;
+
+/** The turn to store for `raw`: cleaned, hashed and stamped `now`. */
+export async function loadTurn(
+  raw: string,
+  maxChars: number,
+  now: Date = new Date(),
+): Promise<Turn> {
+  const cleaned = cleanTurn(raw, maxChars);
+  return {
+    ...cleaned,
+    sourceRef: await sourceRef(cleaned.text),
+    empty: ONLY_PLACEHOLDERS.test(cleaned.text),
+    loadedAt: now.toISOString(),
+  };
+}
+
+/** Jev's route if it is a known one at or above the cut-off, else llm. */
+export function effectiveRoute(
+  choice: string | undefined,
+  confidence: number | undefined,
+  cutoff: number,
+): Route {
+  if (!ROUTES.includes(choice as Route)) return "llm";
+  if (confidence === undefined || confidence < cutoff) return "llm";
+  return choice as Route;
+}
+
+/** What the hook should do with the turn. Step 1 always passes. */
+export function buildReply(
+  args: Omit<ReplyArgs, "mode" | "cutoff"> & {
+    mode: ReplyArgs["mode"];
+    cutoff: number;
+  },
+  now: Date = new Date(),
+): Reply {
+  const choice = args.choice ?? "";
+  const route = effectiveRoute(choice, args.confidence, args.cutoff);
+  let reason: string;
+  if (!choice) reason = "no route answer";
+  else if (route !== choice) reason = "confidence below cut-off";
+  else if (route === "llm") reason = "llm route";
+  else reason = `${route} route not built yet`;
+  if (args.mode === "shadow") reason = `shadow: ${reason}`;
+  return {
+    action: "pass",
+    text: "",
+    mode: args.mode,
+    route,
+    choice,
+    confidence: args.confidence ?? null,
+    cutoff: args.cutoff,
+    sourceRef: args.sourceRef,
+    reason,
+    elapsedMs: args.hookStartedAt ? now.getTime() - args.hookStartedAt : null,
+    repliedAt: now.toISOString(),
+  };
+}
+
+interface MethodContext {
+  globalArgs: GlobalArgs;
+  writeResource: (
+    specName: string,
+    name: string,
+    data: Record<string, unknown>,
+  ) => Promise<{ name: string }>;
+  logger: { info: (msg: string, props: Record<string, unknown>) => void };
+}
+
+/** The model type: `load` and `reply`, one resource each. */
+export const model = {
+  type: "@mesgme/puddlerouter",
+  version: "2026.10.13.1",
+  globalArguments: GlobalArgsSchema,
+  resources: {
+    turn: {
+      description: "The cleaned text of the last turn and its sourceRef.",
+      schema: TurnSchema,
+      lifetime: "14d" as const,
+      garbageCollection: 2000,
+    },
+    reply: {
+      description: "What the hook should do with the last turn, and why.",
+      schema: ReplySchema,
+      lifetime: "14d" as const,
+      garbageCollection: 2000,
+    },
+  },
+  methods: {
+    load: {
+      description: "Read a turn file, clean it and store it as `turn`.",
+      arguments: LoadArgsSchema,
+      execute: async (args: LoadArgs, context: MethodContext) => {
+        const raw = await Deno.readTextFile(args.turnFile);
+        const turn = await loadTurn(raw, args.maxChars);
+        const handle = await context.writeResource("turn", "turn", turn);
+        context.logger.info("Loaded turn {sourceRef}", {
+          sourceRef: turn.sourceRef,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
+    reply: {
+      description: "Turn the route into a reply for the hook; store `reply`.",
+      arguments: ReplyArgsSchema,
+      execute: async (args: ReplyArgs, context: MethodContext) => {
+        const reply = buildReply({
+          ...args,
+          mode: args.mode ?? "shadow",
+          cutoff: args.cutoff ?? 0.7,
+        });
+        const handle = await context.writeResource("reply", "reply", reply);
+        context.logger.info("Reply {action} for {sourceRef} ({reason})", {
+          action: reply.action,
+          sourceRef: reply.sourceRef,
+          reason: reply.reason,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
+  },
+};
