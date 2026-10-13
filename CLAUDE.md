@@ -53,9 +53,12 @@ directly). The older `swamp model method run` spelling remains supported.
 ## Puddle repo
 
 This repo is a puddle made from `puddle-works/puddle-template` ([ADR-004][adr]).
-It holds one puddle: one extension with one bounded purpose.
+It holds one puddle, `@mesgme/puddlerouter`: a Claude Code hook that sends each
+typed turn to swamp, Jev or Claude. The plan and step 0 findings are in
+`docs/puddlerouter.md`.
 
-- `make test` runs every test in `extensions/models/`.
+- `make test` runs the extension tests in `extensions/models/`, the hook tests
+  in `hooks/` (against a fake swamp) and the workflow checks in `tests/`.
 - `make contracts-check` and `make guardrails-check` run the shared checks from
   puddle-tooling. Every workflow in `workflows/` needs `maxReruns` and
   `maxWallClock` tags, and a workflow that reads another model's data with
@@ -64,7 +67,14 @@ It holds one puddle: one extension with one bounded purpose.
   push with `--yes`; `VISIBILITY` must equal `visibility:` in `manifest.yaml`.
 - Review reports live in `swamp-extension-review/` and are committed with the
   version they review.
-- `example.ts`, its test and `workflows/example.yaml` are placeholders. Replace
-  them; do not extend them.
+- Workflow names in the extension must start with `@mesgme/` (the publish
+  quality gate checks this).
+- **The hook stays in shadow mode** (logs only, never blocks) until step 5,
+  which needs a week of shadow data and the owner's go-ahead.
+- Never put turn text in a swamp `--input`: the hook passes a temp file's path
+  only. `@...` input values are read as files, and inputs are recorded in run
+  history.
+- The route instructions and criteria in `workflow-puddlerouter.yaml` and
+  `workflow-puddlerouter-route-eval.yaml` must stay identical.
 
 [adr]: https://github.com/puddle-works/puddleworks-apps/blob/main/docs/adr/ADR-004-one-repo-per-puddle.md

@@ -5,7 +5,8 @@ description: >-
   accuracy can be scored at several confidence cut-offs. Run it with
   --input-file docs/route-eval/turns.yaml; each answer is stored as the jev
   model's choice data named route-eval-<turn id>. The instructions and
-  criteria here must stay the same as the route step in puddlerouter.yaml.
+  criteria here must stay the same as the route step in
+  workflow-puddlerouter.yaml.
 version: 1
 tags:
   maxReruns: "3"
