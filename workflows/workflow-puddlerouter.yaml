@@ -57,14 +57,14 @@ jobs:
           inputs:
             turnFile: ${{ inputs.turnFile }}
       - name: route
-        description: Ask Jev which route the turn should take. Skipped for an empty turn.
+        description: Ask Jev which route the turn should take. Skipped for an empty turn, and for a turn that looks like it holds a secret (never sent to Jev).
         dependsOn:
           - step: load
             condition:
               type: succeeded
         weight: 0
         allowFailure: true
-        guard: ${{ steps.load.outputs.empty }}
+        guard: ${{ steps.load.outputs.empty || steps.load.outputs.withheld }}
         task:
           type: model_method
           modelIdOrName: jev

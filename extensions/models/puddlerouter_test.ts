@@ -15,6 +15,7 @@ import {
   decisionAnswer,
   effectiveRoute,
   loadTurn,
+  looksSecret,
   model,
   normalise,
   sourceRef,
@@ -288,6 +289,47 @@ Deno.test("loadTurn marks a turn complete only if nothing was removed or cut", a
     false,
   );
   assertEquals((await loadTurn("a".repeat(50), 10)).complete, false);
+});
+
+const SECRETS = [
+  "is ghp_abcdefghijklmnopqrstuvwxyz0123456789 a valid token format?",
+  "use github_pat_11ABCDEFG0abcdefghijklmnopqrstuv for this",
+  "my key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+  "AKIAIOSFODNN7EXAMPLE is that an aws key?",
+  "slack xoxb-123456789012-abcdefghijklmn",
+  "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456",
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
+  "-----BEGIN RSA PRIVATE KEY-----",
+  "password=hunter2 is that strong?",
+  "export API_TOKEN: abcd1234 ok?",
+  "email me at mark@example.com about it",
+  "is 3f2a9c1b7d4e8f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a a good id?",
+];
+
+Deno.test("looksSecret flags tokens, keys, passwords, emails and long hex", () => {
+  for (const text of SECRETS) assert(looksSecret(text), text);
+});
+
+Deno.test("looksSecret leaves ordinary questions alone", () => {
+  for (
+    const text of [
+      "is 'Add hook for routing prompts' written in the imperative mood?",
+      "list the open pull requests in puddle-works/puddleworks",
+      "is this variable name descriptive enough: 'x2'?",
+      "what is the latest published version of @swamp/aws/ec2?",
+      "should we set a password policy of 12 characters?",
+      "the commit is 6e04ffa, is the message good?",
+    ]
+  ) assert(!looksSecret(text), text);
+});
+
+Deno.test("loadTurn withholds a secret turn: placeholder text, not complete", async () => {
+  const turn = await loadTurn(SECRETS[0], 2000);
+  assertEquals(turn.withheld, true);
+  assertEquals(turn.complete, false);
+  assertEquals(turn.text, "[withheld: looks like it contains a secret]");
+  assertEquals(turn.text.includes("ghp_"), false);
+  assertEquals((await loadTurn("is 'x2' a good name?", 2000)).withheld, false);
 });
 
 Deno.test("load fails when the turn file is missing", async () => {

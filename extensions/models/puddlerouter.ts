@@ -60,6 +60,8 @@ export const TurnSchema = z.object({
   truncated: z.boolean(),
   /** True when nothing was replaced or cut, so the text is the whole turn. */
   complete: z.boolean(),
+  /** True when the turn looked like it held a secret; `text` is a placeholder. */
+  withheld: z.boolean(),
   loadedAt: z.iso.datetime(),
 });
 /** The stored turn. */
@@ -171,6 +173,28 @@ export async function sourceRef(text: string): Promise<string> {
   return `puddlerouter:${hex.slice(0, 16)}`;
 }
 
+const SECRET_PATTERNS: RegExp[] = [
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/,
+  /\bsk-[A-Za-z0-9_-]{16,}/,
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/,
+  /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}/i,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /\b[\w-]*(?:password|passwd|secret|token|api[_-]?key)[\w-]*\s*[:=]\s*\S+/i,
+  /[\w.+-]+@[\w-]+\.[\w.-]+/,
+  /\b[0-9a-f]{32,}\b/i,
+];
+
+/** True if the text looks like it holds a token, key, password, email or hash. */
+export function looksSecret(text: string): boolean {
+  return SECRET_PATTERNS.some((re) => re.test(text));
+}
+
+/** What `text` is replaced with when the turn looks like it holds a secret. */
+export const WITHHELD_TEXT = "[withheld: looks like it contains a secret]";
+
 const ONLY_PLACEHOLDERS = /^(\[(pasted text|code block)\]\s*)*$/;
 
 /** The turn to store for `raw`: cleaned, hashed and stamped `now`. */
@@ -179,13 +203,17 @@ export async function loadTurn(
   maxChars: number,
   now: Date = new Date(),
 ): Promise<Turn> {
-  const cleaned = cleanTurn(raw, maxChars);
+  const withheld = looksSecret(raw);
+  const cleaned = withheld
+    ? { text: WITHHELD_TEXT, pasted: 0, fenced: 0, truncated: false }
+    : cleanTurn(raw, maxChars);
   return {
     ...cleaned,
     sourceRef: await sourceRef(cleaned.text),
-    empty: ONLY_PLACEHOLDERS.test(cleaned.text),
-    complete: cleaned.pasted === 0 && cleaned.fenced === 0 &&
+    empty: !withheld && ONLY_PLACEHOLDERS.test(cleaned.text),
+    complete: !withheld && cleaned.pasted === 0 && cleaned.fenced === 0 &&
       !cleaned.truncated,
+    withheld,
     loadedAt: now.toISOString(),
   };
 }

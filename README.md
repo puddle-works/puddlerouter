@@ -25,7 +25,9 @@ prompt ─▶ hooks/puddlerouter.sh
            with "<", turns over 2,000 characters, PUDDLEROUTER=off
            writes the turn to a mktemp file; passes only its path
         ─▶ swamp workflow run @puddleworks/puddlerouter --input turnFile=<path>
-             load   strip pasted and fenced blocks, cap, hash (sourceRef) → turn
+             load   strip pasted and fenced blocks, cap, hash (sourceRef) → turn;
+                    a turn that looks like it holds a secret is stored as a
+                    placeholder and never sent to Jev
              route  jev.choice over deterministic / decision / llm (cut-off 0.7)
              decide jev.noul, only for a decision turn with nothing pasted,
                     fenced or cut; yes at ≥ 0.8, no at ≤ 0.2, else unsure

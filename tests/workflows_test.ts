@@ -61,6 +61,13 @@ Deno.test("the router asks Jev the decision question the decision eval scored", 
   );
 });
 
+Deno.test("the route step is skipped for an empty or withheld turn", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "route");
+  const guard = step.guard ?? "";
+  assert(guard.includes("steps.load.outputs.empty"));
+  assert(guard.includes("steps.load.outputs.withheld"));
+});
+
 Deno.test("the decide step only runs for a confident decision on a complete turn", async () => {
   const step = await stepOf("workflow-puddlerouter.yaml", "decide");
   assertEquals(step.allowFailure, true);

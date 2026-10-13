@@ -1,12 +1,12 @@
 {
   "extension": "@puddleworks/puddlerouter",
   "version": "2026.10.13.1",
-  "reviewedAt": "2026-10-13T10:26:19Z",
+  "reviewedAt": "2026-10-13T10:33:44Z",
   "dimensions": [
     {
       "id": "credentials-secrets",
-      "verdict": "na",
-      "note": "The model holds no credentials and makes no network calls. The Jev key is read by @swamp/typesafe-ai from the typesafe vault, not by this model."
+      "verdict": "pass",
+      "note": "The model holds no credentials. The Jev key is read by @swamp/typesafe-ai from the vault. load withholds any turn that looks like it holds a secret (token, key, password, email, long hex): stored text is a placeholder and the Jev steps are skipped (tested)."
     },
     {
       "id": "logging-quality",
@@ -21,7 +21,7 @@
     {
       "id": "testing-completeness",
       "verdict": "pass",
-      "note": "30 unit tests: cleaning, hashing, empty and complete turns, cut-offs, the answer cut-off at its edges, every reply reason, live block text for yes and no, shadow passing with wouldAction, elapsedMs, load failure, reply writing one resource, and log order. 25 hook and workflow tests, including that the decide step is guarded and asks the question the decision eval scored."
+      "note": "33 unit tests: cleaning, hashing, empty, complete and withheld turns, secret patterns (12 positive, 6 negative), cut-offs, every reply reason, live block text, shadow wouldAction, elapsedMs, load failure, one resource written, log order. 26 hook and workflow tests, including the route and decide guards."
     },
     {
       "id": "idempotency-resilience",

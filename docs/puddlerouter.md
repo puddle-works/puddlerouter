@@ -335,6 +335,19 @@ in step 1 keeps passing every turn and now also logs what live mode would do.
   version), and the global arguments did not change, so no upgrade entry is
   needed.
 
+### Secrets are not sent to Jev
+
+Jev is an outside service (`https://opencode.ai/zen`), and `load` only removes
+pasted and fenced blocks, so a token typed inline would have gone to it and
+into the stored data. `load` now checks the raw turn with `looksSecret`: GitHub,
+`sk-`, AWS and Slack tokens, bearer tokens, JWTs, private-key headers,
+`password=`/`token:` assignments, emails and hex strings of 32+ characters.
+There is no redaction. A matching turn gets `withheld: true`, its stored text
+becomes `[withheld: looks like it contains a secret]`, and the `route` and
+`decide` steps are skipped, so Claude runs as normal. Patterns catch common
+shapes only; a plain-English password is not caught. Turns logged before this
+change may hold secrets in `turn` and Jev's `choice` data (14 days; last 20).
+
 ### Decision accuracy
 
 Run 2026-10-13 with the `puddlerouter-decision-eval` workflow over
