@@ -10,8 +10,8 @@ workflow, and Jev (TypeSafe's System One model) picks a route:
 | `decision`      | A yes/no judgement about text in the turn               | Jev answers it (built in step 2)                                                                                                                                                                                 |
 | `llm`           | Anything else, or Jev is unsure                         | Claude runs as normal                                                                                                                                                                                            |
 
-**Status: shadow mode, decision and deterministic routes built (steps 2 and
-3).** The hook logs what live mode would do and never blocks: Claude always
+**Status: shadow mode; every route and the recipe packs are built (steps 2 to
+4, 6, 6b and 6c).** The hook logs what live mode would do and never blocks: Claude always
 runs. In live mode (`PUDDLEROUTER_MODE=live`) a yes/no question Jev answers
 confidently is blocked and Jev's answer is shown instead, and so is a git
 status, log or branch question a recipe answers. Shadow mode stays the default

@@ -3,6 +3,11 @@
 - [Step 0: checks](#step-0-checks)
 - [Step 1: shadow mode](#step-1-shadow-mode)
 - [Step 2: decision route](#step-2-decision-route)
+- [Step 3: deterministic route](#step-3-deterministic-route)
+- [Step 4: raise an issue when nothing can answer](#step-4-raise-an-issue-when-nothing-can-answer)
+- [Step 6: local config and a wider allowlist](#step-6-local-config-and-a-wider-allowlist)
+- [Step 6b: caches](#step-6b-caches)
+- [Step 6c: recipe packs, `recipeIndex` and the sync workflow](#step-6c-recipe-packs-recipeindex-and-the-sync-workflow)
 
 ## Step 0: checks
 
@@ -594,3 +599,12 @@ The `reply` data: `route` deterministic, `recipe` `github-open-prs`, no pick,
 no search, not cached, confidence 0.92, `elapsedMs` 3148, `action` pass
 (`wouldAction` block). The reply was readable about 10 s after the hook was
 started.
+
+### Setting up the runtime repo
+
+`match` never pulls, so a runtime repo (the one the hook runs in) answers from
+packs only after `swamp workflow run @puddleworks/puddlerouter-recipes-sync`
+has run in it once. Re-run it by hand when a pack changes, or run
+`swamp serve` for the daily `0 6 * * *` schedule. Sync pulls the pack's
+extensions, so it dirties the tracked `extensions/models/upstream_extensions.json`
+there; `git checkout` it before a `git pull --ff-only`.
