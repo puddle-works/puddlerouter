@@ -502,7 +502,45 @@ The plan's registry side of step 6 is deferred:
 
 - recipe packs published to the registry (a public pack needs explicit approval)
 - the `puddlerouter-recipes-sync` workflow and `recipeIndex`
-- the route, result and search caches, so "a repeated turn makes no Jev call"
-  is not yet true
 
 A fresh checkout therefore gets the built-in recipes, not registry packs.
+
+## Step 6b: caches
+
+Three caches, all kept as this model's own swamp resources (read with
+`readResource`, so nothing shells out to `swamp data`). Each entry holds
+`cachedAt` and the code checks its age, so reuse does not depend on when swamp
+garbage-collects the data.
+
+| Cache | Key | Lifetime | Saves |
+|---|---|---|---|
+| `routeCache` | `route-v1-<hex of sourceRef>` | 7 days | Jev's route, decide and pick answers |
+| `searchCache` | `search-<hash of the query>` | 1 day | `model type search` + `extension search` |
+| `resultCache` | `result-<hash of recipe id + captures>` | per recipe `cacheFor`, default none | a recipe's answer |
+
+- **Route cache.** A new `recall` step after `load` reads the entry and always
+  writes fixed-shape flags (`hasRoute`, `hasDecision`, `hasPick`, ...). The
+  `route`, `decide` and `pick` steps are skipped when their flag is set. `reply`
+  merges fresh and recalled answers (fresh wins), stores the merged answers, and
+  sets `reply.cached` when any answer came from the cache. The raw choice and
+  confidence are stored and the cut-offs apply at use, so changing a cut-off needs
+  no flush. Bump `ROUTE_CACHE_VERSION` when the route, decide or pick question
+  changes. `match`, `execute` and `raise` always run.
+- **Search cache.** Stores the merged result before the allowlist filter, so
+  allowlist changes apply at once. Written only when both searches succeeded. A
+  newly pulled extension can take up to a day to show.
+- **Result cache.** Opt-in per local recipe with `cacheFor: 30s | 5m | 1h`. No
+  built-in recipe sets it. Only a successful run is stored.
+
+Checked live in the larvacean-caches worktree (shadow mode). The Jev vault key
+is empty in that worktree, so the `route` step fails there; the route cache was
+therefore seeded with a `reply` run and the second step was checked from it:
+
+| Run | Steps | Result |
+|---|---|---|
+| "git status", route cached | `route`, `decide`, `pick` skipped; `match`, `execute` ran | `reply.cached` true, same route |
+| "list the hetzner servers", first | `match` ran both searches | 3.7 s |
+| "list the hetzner servers", repeat | `match` served from `searchCache` | 1.2 s |
+
+Not yet checked live: a repeated turn with real Jev answers (needs the vault key
+in the runtime clone), and the decision turn twice.

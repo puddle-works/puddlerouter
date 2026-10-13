@@ -1,0 +1,82 @@
+{
+  "extension": "@puddleworks/puddlerouter",
+  "version": "2026.10.13.2",
+  "reviewedAt": "2026-10-13T13:50:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "The model holds no credentials. The Jev key is read by @swamp/typesafe-ai from the vault. load withholds any turn that looks like it holds a secret (token, key, password, email, long hex): stored text is a placeholder and the Jev steps are skipped (tested). match and execute run only `swamp` on the PATH with fixed arguments: the recipe's regex captures digits only and they go in with --literal-inputs, so turn text is never a swamp input; only allowlisted extensions (@swamp/*, @mesgme/*, @webframp/*, @puddleworks/*, plus the repo's own puddlerouter.yaml `allow:` list, which only the repo owner writes) are pulled or run, and only read-only recipes. Local recipes in puddlerouter.yaml take captures only of a declared shape (int, repo, word), checked before they become --literal-inputs method inputs. raise passes only the cleaned turn (never a withheld one) to @webframp/github's create_issue, which uses the user's gh login; the repo and key are fixed by the workflow. Step 6b caches hold no turn text: the route cache is keyed by the sourceRef's hash and stores only Jev's choice, confidence, yes probability, pick and the candidate names; the search cache stores the query's hash and extension names/descriptions that search returned; the result cache stores a recipe's rendered answer under a hash of recipe id and captures, only for local recipes that set cacheFor. A withheld turn gets no route entry because Jev is never asked."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "load and reply log at info on entry and on completion with structured properties (tested); reply logs the action and reason. Neither logs the turn text."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "load throws on an unreadable turn file before writing (tested). reply inputs are validated by zod; a missing route answer, a missing or failed decide answer, an unsure answer and an incomplete turn are each recorded with a reason and pass, so the workflow fails open (each tested). match fails open: a failed or unparseable search gives kind none; execute turns an unknown recipe, a failed pull or run, bad JSON and missing data into ok=false with a reason, and reply passes (each tested). parseConfig never throws: invalid YAML, a bad allow entry or a bad local recipe is dropped and reported, and loadConfig falls back to the defaults for a missing or unreadable file (each tested). A capture of the wrong shape makes the recipe fail with 'bad input', and reply passes. Step 6b: recallRoute never throws (a missing, malformed, expired or unreadable entry is a miss, each tested); a failed cache read or write in match and execute is swallowed and the search or recipe runs as before; a failed search is not cached; a failed recipe run is not cached; a turn Jev gave no route for is not cached (each tested)."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "33 unit tests: cleaning, hashing, empty, complete and withheld turns, secret patterns (12 positive, 6 negative), cut-offs, every reply reason, live block text, shadow wouldAction, elapsedMs, load failure, one resource written, log order. 26 hook and workflow tests, including the route and decide guards. Step 6 adds tests for the allowlist, the config parser, local recipe matching, running and rendering, capture shapes, and match reading puddlerouter.yaml. Step 6b adds tests for recall hit, miss, expiry, read error and malformed entry; withRecall (fills, fresh wins, miss); reply writing and not writing the route cache; the search cache hit, expiry, failed search and allowlist applied after; the result cache opt-in, expiry, failure and cacheFor parsing; and workflow guards for recall on route, decide and pick."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Each method writes one fixed-name resource as a new version; repeating a run adds a version and changes nothing else. The issue is keyed by the turn's sourceRef, so a repeated turn reuses the issue (verified live). Step 6b: a cache entry is a deterministic function of the turn, so rewriting it is harmless; reply skips the write when every answer came from the cache."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "na",
+      "note": "No external API; Jev is called by the @swamp/typesafe-ai step in the workflow."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "load reads the turn file with Deno.readTextFile and holds no handle. The hook, which creates the file, removes it."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Manifest publishes README, LICENSE, the model and the router workflow (not the eval workflows). README has no IPs, hostnames, account ids or personal paths; private visibility."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Plain z.object schemas with enums and iso datetimes; no passthrough."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "turn, reply, match, result and recall: lifetime 14d, garbageCollection 2000. routeCache 7d, searchCache and resultCache 1d, garbageCollection 1 per instance (the latest version is all that is read). Age is also checked in code from cachedAt, so reuse does not depend on when swamp collects."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Not a lifecycle model; stateless per-turn methods plus caches that expire."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "Methods change nothing outside swamp data."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "load writes turn/turn, reply reply/reply, recall recall/recall; the caches use distinct prefixes (route-v1-, search-, result-) because readResource takes an instance name without the spec, so no two specs share a name. Checked field by field: every schema field is written for reply (including cached), recall, routeCache, searchCache, resultCache and result (including cached)."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "recall, match and execute read their own cache entries with context.readResource (never dataRepository, never `swamp data`); the result is parsed with zod before use."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "Not yet published (swamp extension version gives currentPublished null), so the version moves with the branch to 2026.10.13.2 and needs no upgrades entry. New resource specs and the new reply and result field (cached) are additive."
+    }
+  ]
+}

@@ -37,6 +37,8 @@ export interface Recipe {
   inputs: (captures: string[]) => Record<string, string>;
   /** The answer as text, from the data's attributes. */
   render: (attrs: Record<string, unknown>) => string;
+  /** How long (ms) a successful answer is reused; missing means never. */
+  cacheFor?: number;
 }
 
 export { isAllowed };

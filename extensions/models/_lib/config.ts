@@ -16,6 +16,7 @@
  *     each: { path: items, line: '#{number} {title}' }
  *     template: "{count} open:\n{lines}"
  *     empty: No open pull requests.
+ *     cacheFor: 5m   # optional: reuse a successful answer for 5 minutes
  * ```
  *
  * A bad entry is reported in `errors` and dropped; the rest still load. Local
@@ -56,6 +57,7 @@ const LocalRecipe = z.object({
   each: z.object({ path: z.string(), line: z.string() }).optional(),
   template: z.string().min(1),
   empty: z.string().optional(),
+  cacheFor: z.string().regex(/^\d+[smh]$/).optional(),
 }).strict();
 type LocalRecipe = z.infer<typeof LocalRecipe>;
 
@@ -85,6 +87,13 @@ function fill(template: string, data: unknown): string {
   });
 }
 
+const UNIT_MS = { s: 1000, m: 60_000, h: 3_600_000 } as const;
+
+function durationMs(text: string): number {
+  return Number(text.slice(0, -1)) *
+    UNIT_MS[text.slice(-1) as keyof typeof UNIT_MS];
+}
+
 function compile(r: LocalRecipe): Recipe {
   const pattern = new RegExp(r.pattern, "i");
   const build = (captures: string[]): Record<string, string> => {
@@ -111,6 +120,7 @@ function compile(r: LocalRecipe): Recipe {
     },
     pattern,
     readOnly: true,
+    cacheFor: r.cacheFor ? durationMs(r.cacheFor) : undefined,
     inputs: build,
     render: (attrs) => {
       let lines = "";

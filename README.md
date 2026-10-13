@@ -30,6 +30,9 @@ prompt ─▶ hooks/puddlerouter.sh
              load   strip pasted and fenced blocks, cap, hash (sourceRef) → turn;
                     a turn that looks like it holds a secret is stored as a
                     placeholder and never sent to Jev
+             recall Jev's earlier route, decision and pick for this exact turn
+                    (route cache, 7 days); route, decide and pick are skipped
+                    for what it holds
              route  jev.choice over deterministic / decision / llm (cut-off 0.7)
              decide jev.noul, only for a decision turn with nothing pasted,
                     fenced or cut; yes at ≥ 0.8, no at ≤ 0.2, else unsure
@@ -77,12 +80,25 @@ read on every `match` and `execute`. It has two optional keys:
   `extension`, `method`, `definition`, `dataName`, `pattern` (must match the
   whole turn), `readOnly` (only `true`), `inputs` (`name: {capture: 1..9, as:
   int|repo|word}`), `fixed`, `each {path, line}`, `template` (`{count}`,
-  `{lines}` and any attribute path) and `empty`. `dataName` may use `{input}`
+  `{lines}` and any attribute path) and `empty`, `cacheFor`. `dataName` may use `{input}`
   placeholders when the method names its data per input.
 
 A captured piece must fit its declared shape before it becomes a method input
 (run with `--literal-inputs`). A bad entry, an unreadable file or a recipe for
 an extension that is not allowed is dropped and logged; the rest still applies.
+
+## Caches
+
+A repeated turn makes no Jev call and no search subprocess:
+
+- **Route cache** (7 days, by the turn's `sourceRef`): Jev's route, decision and
+  pick. `reply.cached` is true when any answer came from it. If the route,
+  decide or pick question changes, bump `ROUTE_CACHE_VERSION` in
+  `extensions/models/puddlerouter.ts`.
+- **Search cache** (1 day, by query): what `model type search` and `extension
+  search` found. A newly pulled extension may not show for up to a day.
+- **Result cache** (opt-in): a local recipe with `cacheFor: 30s`, `5m` or `1h`
+  reuses its last successful answer for that long. No built-in recipe does.
 
 ## Issues
 

@@ -27,3 +27,5 @@ recipes:
       line: "#{number} {title}"
     template: "{count} open pull requests:\n{lines}"
     empty: "No open pull requests."
+    # Optional: reuse a successful answer for this long (30s, 5m, 1h). Default none.
+    cacheFor: 5m

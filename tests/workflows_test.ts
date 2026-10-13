@@ -173,3 +173,39 @@ Deno.test("the extension, model and workflow are all @puddleworks/puddlerouter",
   assertEquals(wf.name, name);
   assertEquals(def.type, name);
 });
+
+Deno.test("recall runs after load and every Jev step is skipped when it holds the answer", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  const recall = await stepOf(wf, "recall");
+  assertEquals(recall.task.modelIdOrName, "puddlerouter");
+  assertEquals(recall.task.methodName, "recall");
+  assertEquals(recall.allowFailure, false);
+  assert(recall.dependsOn?.some((d) => d.step === "load"));
+  const flags: Record<string, string> = {
+    route: "hasRoute",
+    decide: "hasDecision",
+    pick: "hasPick",
+  };
+  for (const [name, flag] of Object.entries(flags)) {
+    const step = await stepOf(wf, name);
+    assert(
+      (step.guard ?? "").includes(`steps.recall.outputs.${flag}`),
+      `${name} guard lacks recall.${flag}`,
+    );
+    assert(
+      step.dependsOn?.some((d) => d.step === "recall"),
+      `${name} lacks recall dep`,
+    );
+  }
+  const reply = await stepOf(wf, "reply");
+  const inputs = reply.task.inputs as Record<string, string>;
+  assert(inputs.recalled.includes("steps.recall.outputs"));
+  assert(reply.dependsOn?.some((d) => d.step === "recall"));
+});
+
+Deno.test("the route cache version is set", async () => {
+  const src = await Deno.readTextFile(
+    new URL("../extensions/models/puddlerouter.ts", import.meta.url),
+  );
+  assert(/export const ROUTE_CACHE_VERSION = "v\d+"/.test(src));
+});
