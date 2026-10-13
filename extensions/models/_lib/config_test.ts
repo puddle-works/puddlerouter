@@ -4,7 +4,12 @@
  * Run with: make test
  */
 import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
-import { allowPredicate, DEFAULT_ALLOWLIST, parseConfig } from "./config.ts";
+import {
+  allowPredicate,
+  DEFAULT_ALLOWLIST,
+  parseConfig,
+  parseRecipe,
+} from "./config.ts";
 import { matchRecipe, runRecipe } from "./recipes.ts";
 
 Deno.test("the default allowlist trusts swamp, mesgme, webframp and puddleworks", () => {
@@ -179,4 +184,42 @@ Deno.test("dataName may name inputs; a repo becomes a slug", () => {
     r.dataNameFor?.(["puddle-works/puddleworks"]),
     "prs-puddle-works-puddleworks-open",
   );
+});
+
+const RAW = {
+  id: "pack-open-prs",
+  extension: "@webframp/github",
+  method: "list_prs",
+  definition: "github",
+  dataName: "prs-{repo}-{state}",
+  pattern: "^open prs in ([\\w.-]+/[\\w.-]+)$",
+  inputs: { repo: { capture: 1, as: "repo" } },
+  fixed: { state: "open" },
+  template: "ok",
+};
+
+Deno.test("parseRecipe compiles one raw recipe and takes its id", () => {
+  const taken = new Set<string>();
+  const r = parseRecipe(RAW, allowPredicate(DEFAULT_ALLOWLIST), taken);
+  assert("recipe" in r);
+  assertEquals(r.recipe.id, "pack-open-prs");
+  assert(taken.has("pack-open-prs"));
+  const m = matchRecipe("open prs in a/b", [r.recipe]);
+  assertEquals(m?.recipe.inputs(m.captures), { repo: "a/b", state: "open" });
+});
+
+Deno.test("parseRecipe refuses a taken id, a disallowed extension, a bad pattern and extra keys", () => {
+  const allow = allowPredicate(DEFAULT_ALLOWLIST);
+  const err = (raw: unknown, taken = new Set<string>()) => {
+    const r = parseRecipe(raw, allow, taken);
+    assert("error" in r, JSON.stringify(raw));
+    return r.error;
+  };
+  assertMatch(err(RAW, new Set(["pack-open-prs"])), /id already used/);
+  assertMatch(err({ ...RAW, extension: "@evil/x" }), /not allowed/);
+  assertMatch(err({ ...RAW, pattern: "^(" }), /bad pattern/);
+  assertMatch(err({ ...RAW, readOnly: false }), /pack-open-prs/);
+  assertMatch(err({ id: "x" }), /recipe x/);
+  const { extension: _, ...noExtension } = RAW;
+  assertMatch(err(noExtension), /extension/);
 });

@@ -1,0 +1,33 @@
+id: 6f0c8a52-3d1e-4b7a-9a41-2c5e8d7b1f34
+name: "@puddleworks/puddlerouter-recipes-sync"
+description: >-
+  Pull the recipe packs (extensions labelled puddlerouter-recipe) that the
+  allowlist covers and store their recipes as the recipeIndex that
+  puddlerouter's match and execute steps read. match never pulls, so a fresh
+  checkout answers from packs only after this has run once. The schedule only
+  fires under swamp serve; otherwise run it by hand. An index older than a day
+  is still used.
+version: 1
+tags:
+  maxReruns: "3"
+  maxWallClock: "2m"
+trigger:
+  schedule: "0 6 * * *"
+inputs:
+  type: object
+  properties:
+    repoDir:
+      type: string
+      default: "."
+      description: The swamp repo the packs are pulled into.
+jobs:
+  - name: main
+    steps:
+      - name: sync
+        description: Pull the packs and store the recipe index.
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: sync
+          inputs:
+            repoDir: ${{ inputs.repoDir }}

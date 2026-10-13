@@ -28,6 +28,7 @@ import {
   routeCacheKey,
   sourceRef,
   type Store,
+  withPacks,
   withRecall,
 } from "./puddlerouter.ts";
 
@@ -1255,4 +1256,139 @@ Deno.test("executeRecipe serves a cached result and expires it after cacheFor", 
   );
   assertEquals(stale.cached ?? false, false);
   assert(calls.calls.length > 0);
+});
+
+// ---- recipe packs ----
+
+const PACK_RAW = {
+  id: "github-open-prs",
+  extension: "@webframp/github",
+  method: "list_prs",
+  definition: "github",
+  dataName: "prs-{repo}-{state}",
+  pattern: "^open prs in ([\\w.-]+/[\\w.-]+)$",
+  inputs: { repo: { capture: 1, as: "repo" } },
+  fixed: { state: "open" },
+  template: "ok",
+};
+
+function indexAt(syncedAt: Date, recipes: unknown[] = [PACK_RAW]) {
+  return {
+    recipes: recipes.map((recipe) => ({ pack: "@puddleworks/p", recipe })),
+    packs: [{ name: "@puddleworks/p", version: "1" }],
+    errors: [],
+    syncedAt: syncedAt.toISOString(),
+  };
+}
+
+Deno.test("withPacks adds pack recipes after the local ones", async () => {
+  const local = parseConfig(`
+recipes:
+  - id: mine
+    extension: '@webframp/github'
+    method: list_prs
+    definition: github
+    dataName: prs
+    pattern: '^mine$'
+    template: t
+`);
+  const { store } = fakeStore({ "recipe-index": indexAt(T0) });
+  const { config, notes } = await withPacks(local, store, T0);
+  assertEquals(config.recipes.map((r) => r.id), ["mine", "github-open-prs"]);
+  assertEquals(notes, []);
+  assertEquals(config.allowlist, local.allowlist);
+});
+
+Deno.test("withPacks with no index, a broken index or a failing store adds nothing", async () => {
+  const none = await withPacks(parseConfig(""), fakeStore().store, T0);
+  assertEquals(none.config.recipes, []);
+  assertEquals(none.notes, []);
+  const broken = await withPacks(
+    parseConfig(""),
+    fakeStore({ "recipe-index": { recipes: "x" } }).store,
+    T0,
+  );
+  assertEquals(broken.config.recipes, []);
+  assertEquals(broken.notes.length, 1);
+  const failing: Store = {
+    read: () => Promise.reject(new Error("down")),
+    write: () => Promise.resolve(),
+  };
+  assertEquals(
+    (await withPacks(parseConfig(""), failing, T0)).config.recipes,
+    [],
+  );
+});
+
+Deno.test("withPacks still uses an index older than a day and says it is stale", async () => {
+  const old = new Date(T0.getTime() - 2 * DAY);
+  const { store } = fakeStore({ "recipe-index": indexAt(old) });
+  const { config, notes } = await withPacks(parseConfig(""), store, T0);
+  assertEquals(config.recipes.length, 1);
+  assertEquals(notes.length, 1);
+  assertMatch(notes[0], /stale/);
+});
+
+Deno.test("withPacks drops a pack recipe that clashes, is no longer allowed or is bad, and says so", async () => {
+  const clash = { ...PACK_RAW, id: "git-status" };
+  const evil = { ...PACK_RAW, id: "evil", extension: "@evil/x" };
+  const bad = { ...PACK_RAW, id: "bad", pattern: "^(" };
+  const { store } = fakeStore({
+    "recipe-index": indexAt(T0, [clash, evil, bad, PACK_RAW]),
+  });
+  const { config, notes } = await withPacks(parseConfig(""), store, T0);
+  assertEquals(config.recipes.map((r) => r.id), ["github-open-prs"]);
+  assertEquals(notes.length, 3);
+});
+
+Deno.test("a pack recipe is matched by findMatch and run by executeRecipe", async () => {
+  const { store } = fakeStore({ "recipe-index": indexAt(T0) });
+  const { config } = await withPacks(parseConfig(""), store, T0);
+  const m = await findMatch(
+    "open prs in a/b",
+    fakeExec({}).exec,
+    T0,
+    REF,
+    config,
+    store,
+  );
+  assertEquals(m.kind, "recipe");
+  assertEquals(m.recipeId, "github-open-prs");
+  const exec = fakeExec({
+    "behavior run": JSON.stringify({
+      dataArtifacts: [{ name: "prs-a-b-open", attributes: {} }],
+    }),
+  });
+  const r = await executeRecipe(
+    m.recipeId,
+    m.captures,
+    exec.exec,
+    "/repo",
+    config,
+    store,
+    T0,
+  );
+  assertEquals(r.ok, true);
+  const call = exec.calls[0];
+  assertEquals(call.slice(2, 5), ["@webframp/github", "list_prs", "github"]);
+  assert(call.includes("repo=a/b") && call.includes("state=open"));
+});
+
+Deno.test("match reads the recipe index through the resource store", async () => {
+  const written: Written[] = [];
+  const context = {
+    ...fakeContext(written),
+    readResource: (name: string) =>
+      Promise.resolve(name === "recipe-index" ? indexAt(new Date()) : null),
+  };
+  await model.methods.match.execute(
+    { text: "open prs in a/b", repoDir: "/nonexistent" },
+    context,
+  );
+  assertEquals(written[0].data.recipeId, "github-open-prs");
+});
+
+Deno.test("the model has a recipeIndex resource and a sync method", () => {
+  assertEquals(model.resources.recipeIndex.lifetime, "7d");
+  assert("sync" in model.methods);
 });

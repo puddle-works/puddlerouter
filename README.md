@@ -87,6 +87,37 @@ A captured piece must fit its declared shape before it becomes a method input
 (run with `--literal-inputs`). A bad entry, an unreadable file or a recipe for
 an extension that is not allowed is dropped and logged; the rest still applies.
 
+## Recipe packs
+
+A pack is an extension labelled `puddlerouter-recipe` that holds one workflow
+per recipe. A fresh checkout gets its recipes with one run:
+
+```sh
+swamp workflow run @puddleworks/puddlerouter-recipes-sync
+```
+
+`sync` searches the registry by that label, pulls each pack the allowlist
+covers (a pack's name is checked like an extension's) when it is missing or
+older than the registry's, and stores the checked recipes as `recipe-index`.
+`match` and `execute` read the index; they never pull. Order of matching: your
+`puddlerouter.yaml` recipes, then pack recipes, then the built-in ones. On an
+id clash the first wins and the clash is logged. An index older than a day is
+still used, with a log line. The workflow's daily schedule only fires under
+`swamp serve`; otherwise run it by hand.
+
+To write a pack, make a workflow per recipe with `name:
+"@<collective>/<pack>-<recipe>"` and one `model_method` step. The
+`puddlerouterRecipe` tag is the recipe as JSON: `id`, `extension` (the extension
+that holds the model type), `pattern`, `dataName`, `inputs`, `each`, `template`,
+`empty`, `cacheFor` (same meaning as a local recipe). The step gives the method
+(`methodName`), the definition (`modelIdOrName`) and the fixed inputs; each
+capture must be fed by a step input written `${{ inputs.<same name> }}`. A
+workflow with more than one step, a step that is not a `model_method`, an
+undeclared input or a recipe for an extension that is not allowed is dropped
+and listed in the index's `errors`. puddlerouter runs the method itself with
+`--literal-inputs`, not the workflow, so the workflow is also a way to run the
+same call by hand. See `puddle-works/puddlerouter-recipes-github`.
+
 ## Caches
 
 A repeated turn makes no Jev call and no search subprocess:
