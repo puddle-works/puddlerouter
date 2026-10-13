@@ -1,12 +1,12 @@
 manifestVersion: 1
-name: "@puddleworks/puddle-template"
-version: "2026.10.12.1"
-description: "Placeholder extension from the puddle template. Replaced by the puddle's own."
+name: "@mesgme/puddlerouter"
+version: "2026.10.13.1"
+description: "Routes each turn typed into Claude Code to swamp, Jev or Claude. Step 1: shadow mode, which logs the route Jev picks and always lets Claude run."
 visibility: private
 additionalFiles:
   - README.md
   - LICENSE
 models:
-  - example.ts
+  - puddlerouter.ts
 workflows:
-  - example.yaml
+  - workflow-puddlerouter.yaml

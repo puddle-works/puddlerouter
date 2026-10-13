@@ -14,6 +14,7 @@ jobs:
         with:
           deno-version: 2.9.7
       - run: deno test extensions/models/
+      - run: deno test --allow-read --allow-write --allow-run --allow-env hooks/ tests/
   contracts:
     uses: puddle-works/puddle-tooling/.github/workflows/contracts-check.yml@v0.1.1
     with:

@@ -1,0 +1,6 @@
+id: 3e40f77d-fabf-4e84-9fe1-35cd2329d2dd
+name: typesafe
+type: local_encryption
+config:
+  auto_generate: true
+createdAt: '2026-10-13T08:43:44.490Z'
