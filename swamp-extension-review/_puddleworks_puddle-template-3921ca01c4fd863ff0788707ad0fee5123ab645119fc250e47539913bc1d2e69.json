@@ -1,0 +1,82 @@
+{
+  "extension": "@puddleworks/puddle-template",
+  "version": "2026.10.12.1",
+  "reviewedAt": "2026-10-12T13:40:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "na",
+      "note": "No credentials, network or handles; pure in-memory greeting."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "logger.info with structured properties before and after the write."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "An empty or blank name throws a clear error; covered by test."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "4 unit tests: type, greeting, empty name, and the method writing one resource."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Rewrites the same greeting instance; safe to repeat."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "na",
+      "note": "No external API."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "na",
+      "note": "No handles, connections or temp files."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Manifest lists only README, LICENSE, the model and the workflow; private visibility."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Zod schemas with iso datetime; no passthrough."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Infinite lifetime with garbage collection of 20 versions on the one resource."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Not a lifecycle model; one stateless method."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "Nothing to check before running."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "na",
+      "note": "Writes one fixed-name resource; no instance naming."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Reads no other model's data."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "First version; no earlier schema to upgrade from."
+    }
+  ]
+}
