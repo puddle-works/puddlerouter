@@ -1,0 +1,77 @@
+# Hand-labelled turns for the step 0 route check. Each turn is something a
+# person might type into Claude Code; `route` is the answer the router should
+# give:
+#
+#   deterministic  code can do it exactly (a swamp extension could run it)
+#   decision       a yes/no judgement Jev can answer from the text alone
+#   llm            anything else: Claude does the turn
+#
+# Accuracy is the share of turns where Jev's `choice` matches `route` with
+# confidence at or above the cut-off. Turns below the cut-off count as `llm`,
+# because that is what the router does with them (fail open).
+turns:
+  # deterministic
+  - text: list the open pull requests in puddle-works/puddleworks
+    route: deterministic
+  - text: what is the latest published version of @swamp/aws/ec2?
+    route: deterministic
+  - text: show me the CI status of PR 42 in puddle-works/puddleworks
+    route: deterministic
+  - text: how many open issues are labelled bug in puddle-works/puddleworks-apps?
+    route: deterministic
+  - text: is the default branch of puddle-works/puddle-tooling protected?
+    route: deterministic
+  - text: which swamp extensions have the label github?
+    route: deterministic
+  - text: when was the last commit on main in puddle-works/puddle-template?
+    route: deterministic
+  - text: list the hetzner servers in my account
+    route: deterministic
+  - text: what's the current status of the mted19 server?
+    route: deterministic
+  - text: show the last five swamp workflow runs that failed
+    route: deterministic
+
+  # decision
+  - text: "is this a good commit message: 'fix stuff'?"
+    route: decision
+  - text: "does this sentence read as British English: 'The colour of the organisation's logo'?"
+    route: decision
+  - text: "should 'retry on 429' be treated as a transient error? yes or no"
+    route: decision
+  - text: "is 'Add hook for routing prompts' written in the imperative mood?"
+    route: decision
+  - text: "is this PR title under 70 characters and descriptive: 'puddlerouter: shadow-mode hook and load/reply methods'?"
+    route: decision
+  - text: "is this error message friendly to a non-technical user: 'ENOENT: no such file or directory'?"
+    route: decision
+  - text: "is the following a question about billing: 'why was I charged twice this month?'"
+    route: decision
+  - text: "does this log line indicate an error: 'INFO server started on :8080'?"
+    route: decision
+  - text: "is 'utilise' plain English, yes or no?"
+    route: decision
+  - text: "is this variable name descriptive enough: 'x2'?"
+    route: decision
+
+  # llm
+  - text: refactor the reply method so the hint text comes from a template
+    route: llm
+  - text: why does this test fail intermittently on CI but pass locally?
+    route: llm
+  - text: write a README section explaining how to install the hook
+    route: llm
+  - text: add a create_issue method to the github extension with tests
+    route: llm
+  - text: explain the difference between a guard and an assert step in swamp workflows
+    route: llm
+  - text: review the diff on this branch for bugs
+    route: llm
+  - text: draft an ADR for storing recipes in the swamp registry
+    route: llm
+  - text: help me plan the next three steps for puddlerouter
+    route: llm
+  - text: rename sourceRef to turnRef everywhere and update the tests
+    route: llm
+  - text: summarise what changed in the last week across puddle-works repos and what I should look at first
+    route: llm
