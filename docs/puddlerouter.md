@@ -7,7 +7,7 @@ changes in the design.
 | # | Check | Status |
 |---|---|---|
 | 1 | `UserPromptSubmit` input, output and timeout | Done (Claude Code docs) |
-| 2 | Does `workflow run --input` evaluate `${{ }}` / `@file`? | Done (swamp docs); live run pending |
+| 2 | Does `workflow run --input` evaluate `${{ }}` / `@file`? | Done (live) |
 | 3 | Jev `choice` route accuracy on 30 labelled turns | Pending: needs the Jev key in this repo |
 | 4a | Can packaged workflow tags hold a regex? | Done (schema) |
 | 4b | Can `extension search` filter by label `puddlerouter-recipe`? | Done (live) |
@@ -75,36 +75,41 @@ Claude Code 2.1.296.
 
 ## 2. Are workflow inputs evaluated?
 
-Source: swamp skill `references/workflow/reference.md` ("Inputs Are Inert and
-Recorded") and `references/model/reference.md` ("Inputs are evaluated"), swamp
-20261013.025835.0.
+Checked live with a throwaway workflow (one assert step that echoes
+`inputs.x`), swamp 20261013.025835.0, and against the swamp skill's
+`references/workflow/reference.md` ("Inputs Are Inert and Recorded").
 
-- **`swamp workflow run --input`:** values are **never** evaluated. A
-  `${{ ... }}` stays literal text. The same holds for `--input-file`, `--stdin`
-  and `workflow resume --input`.
-- **`@file`:** only the `swamp serve --webhook` secret field reads `@file=`.
-  Workflow `--input` has no `@file` form.
-- **But inputs are recorded:** in the run record, the history index that
+| `--input` value | `inputs.x` in the run |
+|---|---|
+| `x=${{ 1 + 1 }}` | `${{ 1 + 1 }}`, literal (12 characters) |
+| `x=${{ env.HOME }}` | `${{ env.HOME }}`, literal |
+| `x=@/etc/hosts` | **the contents of `/etc/hosts`** |
+| `x=@file=/etc/hosts` | error: `Input file not found … Values starting with @ are read as file paths; use \@ for a literal @` |
+
+- **`${{ }}` is never evaluated** in workflow inputs.
+- **A value starting with `@` is read as a file path.** Prompt text passed as
+  an input could read any file the user can read, just by starting with `@`.
+  Prompts starting with `@` are common in Claude Code (file mentions).
+- **Inputs are recorded:** in the run record, the history index that
   `workflow history search --input` filters on, child runs, and evaluated model
   definitions.
-- **`swamp model method run --input`:** values **are** evaluated (`vault.get`,
-  `env.X` resolve). Text from a prompt must only reach a method with
-  `--literal-inputs`.
+- **`swamp model method run --input`** values *are* evaluated (`vault.get`,
+  `env.X` resolve, per `references/model/reference.md`). Text from a prompt
+  must only reach a method with `--literal-inputs`.
+- **Delay:** a one-step workflow run takes 1.2 s wall clock (three runs, all
+  1.21 s). That is swamp's fixed cost per turn before any Jev call.
 
 **What this changes:**
 
-- Passing the prompt text as a workflow input would be safe from evaluation,
-  but it would copy every prompt into the run history index. The hook still
-  passes only the turn file's path, as planned. The reason is to keep prompt
-  text out of the run index, not evaluation.
+- The hook passes only the turn file's path, as planned. That is now required
+  for two reasons: an `@` prompt would otherwise be read as a file, and the text
+  would otherwise be copied into the run index. The path is one the hook
+  creates with `mktemp`, so it never starts with `@`.
 - `load` reads the file and writes a `turn` resource. That resource holds the
   cleaned text, so the text is still kept as swamp data. The `turn` resource
   gets a short `lifetime` (7 days) so it expires with the route cache.
 - `execute` must always call `swamp model … method run … --literal-inputs`,
   because recipe captures come from the prompt.
-- **Pending:** a live run confirming `--input 'x=${{ 1 + 1 }}'` stays literal.
-  It needs `swamp workflow create`, which this session could not run (see
-  "Blocked in this session").
 
 ## 3. Jev route accuracy
 
@@ -150,18 +155,13 @@ Manifests carry `labels:` and `workflows:` (see `@mesgme/control-plane` in
 `labels: [puddlerouter-recipe]` and one workflow per recipe.
 `--content-type workflows` narrows it further.
 
-## Blocked in this session
+## Repo setup
 
-The Claude Code auto-mode classifier refused these commands, so the checks that
-need them are pending:
-
-| Command | Needed for |
-|---|---|
-| `claude -p --settings <probe settings>` with a probe hook | A live check of item 1 (docs used instead) |
-| `swamp repo init` in a scratch directory | A throwaway repo for item 2 |
-| `swamp workflow create probe-input` | A live check of item 2 |
-| `swamp model list` | Inspecting this repo |
-
-Running item 3 also needs `swamp extension pull @swamp/typesafe-ai`,
-`swamp model create` and `swamp model method run`, which are the same kind of
-command.
+The repo was created from the template without step 5 of the template README
+(`swamp repo init --force --tool claude`). Without it the repo had the
+template's `repoId` and no `.claude/settings.local.json`, and Claude Code's
+auto-mode classifier refused swamp commands that change the repo
+(`workflow create`, `model list`, `repo init` elsewhere). After the user ran
+`swamp repo init --force --tool claude`, those commands ran. The new `repoId`,
+the refreshed managed section of `CLAUDE.md` and the `vaults/` definitions
+(no secrets) are committed with this step.

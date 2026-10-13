@@ -1,0 +1,57 @@
+id: a2f4755c-1595-4aa1-b916-372666bd7768
+name: puddlerouter-route-eval
+description: >-
+  Ask Jev the router's route question for each hand-labelled turn, so its
+  accuracy can be scored at several confidence cut-offs. Run it with
+  --input-file docs/route-eval/turns.yaml; each answer is stored as the jev
+  model's choice data named route-eval-<turn id>. The instructions and
+  criteria here must stay the same as the route step in puddlerouter.yaml.
+version: 1
+tags:
+  maxReruns: "3"
+  maxWallClock: "10m"
+inputs:
+  type: object
+  properties:
+    turns:
+      type: array
+      description: Labelled turns, each {id, text, route}.
+  required: [turns]
+jobs:
+  - name: eval
+    description: One jev.choice per turn.
+    dependsOn: []
+    weight: 0
+    steps:
+      - name: route
+        description: Ask Jev which route the turn should take.
+        dependsOn: []
+        weight: 0
+        allowFailure: true
+        concurrency: 3
+        forEach:
+          item: turn
+          in: ${{ inputs.turns }}
+        task:
+          type: model_method
+          modelIdOrName: jev
+          methodName: choice
+          inputs:
+            name: route-eval-${{ self.turn.id }}
+            state: ${{ self.turn.text }}
+            instructions: >-
+              Route this request typed into a coding assistant. Pick
+              deterministic only if a program could answer it exactly by
+              calling an API or CLI, with no judgement. Pick decision only if
+              it asks for a yes/no judgement about text given in the request.
+              Pick llm for anything else, such as writing, changing, reviewing
+              or explaining code.
+            criteria:
+              deterministic: >-
+                A program could answer it exactly by calling an API or CLI,
+                with no judgement (list, count, look up, show status).
+              decision: >-
+                It asks for a yes/no judgement about text given in the request.
+              llm: >-
+                Anything else: writing, changing, reviewing, planning or
+                explaining code or documents.
