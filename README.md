@@ -1,6 +1,6 @@
 # puddlerouter
 
-`@mesgme/puddlerouter` checks each turn typed into Claude Code before Claude
+`@puddleworks/puddlerouter` checks each turn typed into Claude Code before Claude
 spends effort on it. A `UserPromptSubmit` hook hands the turn to a swamp
 workflow, and Jev (TypeSafe's System One model) picks a route:
 
@@ -22,7 +22,7 @@ prompt ─▶ hooks/puddlerouter.sh
            skips /commands, ! shell turns, "llm:" prefix, turns starting
            with "<", turns over 2,000 characters, PUDDLEROUTER=off
            writes the turn to a mktemp file; passes only its path
-        ─▶ swamp workflow run @mesgme/puddlerouter --input turnFile=<path>
+        ─▶ swamp workflow run @puddleworks/puddlerouter --input turnFile=<path>
              load   strip pasted and fenced blocks, cap, hash (sourceRef) → turn
              route  jev.choice over deterministic / decision / llm (cut-off 0.7)
              reply  {action: block|hint|pass, text} → reply
@@ -65,12 +65,13 @@ Hook settings (environment): `PUDDLEROUTER=off` skips every turn;
 
 ## Read the shadow log
 
-Every routed turn is a run of `@mesgme/puddlerouter`, with a `turn` and a
-`reply` resource kept for 14 days.
+Every routed turn is a run of `@puddleworks/puddlerouter`, with a `turn` and a
+`reply` resource kept for 14 days. Turns logged before the rename are runs of
+`@mesgme/puddlerouter`; the first query includes both names.
 
 ```sh
 # Each turn: when, text, route, Jev's choice and confidence, delay in ms
-swamp data query 'modelName == "puddlerouter" && version >= 0 && workflowName == "@mesgme/puddlerouter"' --json \
+swamp data query 'modelName == "puddlerouter" && version >= 0 && workflowName in ["@puddleworks/puddlerouter", "@mesgme/puddlerouter"]' --json \
   | jq -c '[.results[] | {run: .workflowRunId, name, content}] | group_by(.run)[]
       | (map({(.name): .content}) | add) as $d | select($d.reply)
       | {at: $d.reply.repliedAt, text: $d.turn.text, route: $d.reply.route,

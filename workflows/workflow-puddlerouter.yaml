@@ -1,5 +1,5 @@
 id: 9366b226-da00-46dc-9a1c-1e6ad0d4c39d
-name: "@mesgme/puddlerouter"
+name: "@puddleworks/puddlerouter"
 description: >-
   Route one turn typed into Claude Code. The hook writes the turn to a temp
   file and passes only its path. load cleans and hashes the text, Jev picks a

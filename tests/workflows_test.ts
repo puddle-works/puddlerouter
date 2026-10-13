@@ -34,3 +34,23 @@ Deno.test("the router asks Jev the question the route eval scored", async () => 
     await routeQuestion("workflow-puddlerouter-route-eval.yaml"),
   );
 });
+
+async function readYaml(path: string) {
+  return parse(await Deno.readTextFile(new URL(`../${path}`, import.meta.url)));
+}
+
+// The @mesgme collective is on swamp's Free plan, which cannot publish
+// privately; @puddleworks can. The hook calls the workflow by this name too.
+Deno.test("the extension, model and workflow are all @puddleworks/puddlerouter", async () => {
+  const name = "@puddleworks/puddlerouter";
+  const manifest = await readYaml("manifest.yaml") as { name: string };
+  const wf = await readYaml("workflows/workflow-puddlerouter.yaml") as {
+    name: string;
+  };
+  const def = await readYaml(
+    "models/@puddleworks/puddlerouter/puddlerouter.yaml",
+  ) as { type: string };
+  assertEquals(manifest.name, name);
+  assertEquals(wf.name, name);
+  assertEquals(def.type, name);
+});

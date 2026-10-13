@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # puddlerouter: Claude Code UserPromptSubmit hook.
 #
-# Hands each typed turn to the `@mesgme/puddlerouter` swamp workflow. The turn goes in
+# Hands each typed turn to the `@puddleworks/puddlerouter` swamp workflow. The turn goes in
 # a mktemp file and only its path is passed: swamp reads an `--input` value
 # starting with `@` as a file, and records every input in its run history.
 #
@@ -59,7 +59,7 @@ case "$turn" in
 esac
 printf '%s' "$prompt" > "$turn" || { rm -f "$turn"; exit 0; }
 
-run_args=(workflow run @mesgme/puddlerouter --repo-dir "$REPO"
+run_args=(workflow run @puddleworks/puddlerouter --repo-dir "$REPO"
   --input "turnFile=$turn" --input "mode=$MODE"
   --input "hookStartedAt=$started")
 

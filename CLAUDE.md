@@ -53,7 +53,7 @@ directly). The older `swamp model method run` spelling remains supported.
 ## Puddle repo
 
 This repo is a puddle made from `puddle-works/puddle-template` ([ADR-004][adr]).
-It holds one puddle, `@mesgme/puddlerouter`: a Claude Code hook that sends each
+It holds one puddle, `@puddleworks/puddlerouter`: a Claude Code hook that sends each
 typed turn to swamp, Jev or Claude. The plan and step 0 findings are in
 `docs/puddlerouter.md`.
 
@@ -67,8 +67,11 @@ typed turn to swamp, Jev or Claude. The plan and step 0 findings are in
   push with `--yes`; `VISIBILITY` must equal `visibility:` in `manifest.yaml`.
 - Review reports live in `swamp-extension-review/` and are committed with the
   version they review.
-- Workflow names in the extension must start with `@mesgme/` (the publish
-  quality gate checks this).
+- The extension, its model type and its workflow are all
+  `@puddleworks/puddlerouter` (`tests/workflows_test.ts` checks this). Workflow
+  names must use the extension's collective (the publish quality gate checks
+  this), and `@puddleworks` because `@mesgme` is on swamp's Free plan, which
+  cannot publish privately.
 - **The hook stays in shadow mode** (logs only, never blocks) until step 5,
   which needs a week of shadow data and the owner's go-ahead.
 - Never put turn text in a swamp `--input`: the hook passes a temp file's path

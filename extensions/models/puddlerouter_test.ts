@@ -22,8 +22,8 @@ import {
 const OPEN = '<pasted_content id="abc">';
 const CLOSE = '</pasted_content id="abc">';
 
-Deno.test("model type is @mesgme/puddlerouter", () => {
-  assertEquals(model.type, "@mesgme/puddlerouter");
+Deno.test("model type is @puddleworks/puddlerouter", () => {
+  assertEquals(model.type, "@puddleworks/puddlerouter");
 });
 
 Deno.test("normalise lowercases and collapses whitespace", () => {
@@ -151,7 +151,8 @@ interface Written {
   data: Record<string, unknown>;
 }
 
-function fakeContext(written: Written[]) {
+/** A method context; `events` records log messages and writes in order. */
+function fakeContext(written: Written[], events: string[] = []) {
   return {
     globalArgs: {},
     writeResource: (
@@ -160,9 +161,10 @@ function fakeContext(written: Written[]) {
       data: Record<string, unknown>,
     ) => {
       written.push({ spec, name, data });
+      events.push(`write ${spec}`);
       return Promise.resolve({ name });
     },
-    logger: { info: () => {} },
+    logger: { info: (msg: string) => void events.push(`log ${msg}`) },
   };
 }
 
@@ -213,4 +215,34 @@ Deno.test("reply writes one reply resource", async () => {
   assertEquals(written[0].spec, "reply");
   assertEquals(written[0].name, "reply");
   assertEquals(written[0].data.action, "pass");
+});
+
+Deno.test("load logs before it reads the turn file", async () => {
+  const events: string[] = [];
+  await assertRejects(() =>
+    model.methods.load.execute(
+      { turnFile: "/nonexistent/puddlerouter-turn", maxChars: 2000 },
+      fakeContext([], events),
+    )
+  );
+  assertEquals(events, ["log Loading turn"]);
+});
+
+Deno.test("reply logs before and after it writes", async () => {
+  const events: string[] = [];
+  await model.methods.reply.execute(
+    {
+      mode: "shadow",
+      sourceRef: "puddlerouter:0123456789abcdef",
+      choice: "llm",
+      confidence: 0.99,
+      cutoff: 0.7,
+    },
+    fakeContext([], events),
+  );
+  assertEquals(events, [
+    "log Replying for {sourceRef}",
+    "write reply",
+    "log Reply {action} for {sourceRef} ({reason})",
+  ]);
 });

@@ -209,7 +209,7 @@ the refreshed managed section of `CLAUDE.md` and the `vaults/` definitions
 ## Step 1: shadow mode
 
 Built in step 1: `load` and `reply` in `extensions/models/puddlerouter.ts`,
-the `@mesgme/puddlerouter` workflow (load → route → reply) and
+the `@puddleworks/puddlerouter` workflow (load → route → reply) and
 `hooks/puddlerouter.sh`. The [README](../README.md) has the set-up and the
 queries that read the log.
 
@@ -238,7 +238,7 @@ queries that read the log.
   is stored with `empty: true` and not sent to Jev.
 - **Workflow name.** The publish quality gate requires every workflow in the
   extension to use the extension's collective, so the workflow is
-  `@mesgme/puddlerouter`, not `puddlerouter`.
+  `@puddleworks/puddlerouter`, not `puddlerouter`.
 - **Fail open.** The route step has `allowFailure`, and `reply` runs whether
   or not Jev answered (`dependsOn … condition: always`); a skipped or failed
   route is recorded as `llm` with reason `no route answer`. `steps.route` is
@@ -249,13 +249,20 @@ queries that read the log.
 
 ### Publishing
 
+The extension is `@puddleworks/puddlerouter`, published privately. It started
+as `@mesgme/puddlerouter`, but the `@mesgme` collective is on swamp's Free plan,
+which cannot publish privately; `@puddleworks` is on the Team plan. Renaming
+keeps the model's id, so turns logged before the rename stay in the log under
+the workflow name `@mesgme/puddlerouter` until they expire. The README queries
+include both names.
+
 `make publish VISIBILITY=private DRY_RUN=1` passes the tests, `deno check`,
-formatting and quality (85%; the missing 15% is a verified public
-repository), then stops at the dry-run push: the `@mesgme` collective is on
-swamp's Free plan, which cannot publish privately. The router does not need
-publishing to run (the runtime repo is a clone of this one). The CI publish job
-also fails because the repo has no `SWAMP_API_KEY` / `SWAMP_SIGNIN_TOKEN`
-secrets.
+formatting, quality (85%; the missing 15% is a verified public repository),
+the registry checks and the adversarial review in `swamp-extension-review/`.
+The router does not need publishing to run (the runtime repo is a clone of
+this one). CI's publish job reads `SWAMP_API_KEY` and `SWAMP_SIGNIN_TOKEN`
+from puddle-works organisation secrets, which are shared only with the
+repositories selected for them; this repo must be one of them.
 
 ### A week of real turns
 

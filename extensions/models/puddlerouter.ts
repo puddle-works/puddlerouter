@@ -1,5 +1,5 @@
 /**
- * @mesgme/puddlerouter — decides what happens to a turn typed into Claude Code
+ * @puddleworks/puddlerouter — decides what happens to a turn typed into Claude Code
  *
  * The `puddlerouter` workflow runs these methods for each turn the hook hands
  * over: `load` reads the turn file and stores the cleaned text, Jev picks a
@@ -217,7 +217,7 @@ interface MethodContext {
 
 /** The model type: `load` and `reply`, one resource each. */
 export const model = {
-  type: "@mesgme/puddlerouter",
+  type: "@puddleworks/puddlerouter",
   version: "2026.10.13.1",
   globalArguments: GlobalArgsSchema,
   resources: {
@@ -239,6 +239,7 @@ export const model = {
       description: "Read a turn file, clean it and store it as `turn`.",
       arguments: LoadArgsSchema,
       execute: async (args: LoadArgs, context: MethodContext) => {
+        context.logger.info("Loading turn", {});
         const raw = await Deno.readTextFile(args.turnFile);
         const turn = await loadTurn(raw, args.maxChars);
         const handle = await context.writeResource("turn", "turn", turn);
@@ -252,6 +253,9 @@ export const model = {
       description: "Turn the route into a reply for the hook; store `reply`.",
       arguments: ReplyArgsSchema,
       execute: async (args: ReplyArgs, context: MethodContext) => {
+        context.logger.info("Replying for {sourceRef}", {
+          sourceRef: args.sourceRef,
+        });
         const reply = buildReply({
           ...args,
           mode: args.mode ?? "shadow",
