@@ -9,6 +9,7 @@ import {
   assertMatch,
   assertRejects,
 } from "jsr:@std/assert@1";
+import { parseConfig } from "./_lib/config.ts";
 import {
   buildReply,
   cleanTurn,
@@ -585,7 +586,10 @@ Deno.test("buildReply does not use a recipe off the deterministic route", () => 
 
 Deno.test("match and execute write one resource each", async () => {
   const w1: Written[] = [];
-  await model.methods.match.execute({ text: "git status" }, fakeContext(w1));
+  await model.methods.match.execute(
+    { text: "git status", repoDir: "/nonexistent" },
+    fakeContext(w1),
+  );
   assertEquals(w1.length, 1);
   assertEquals(w1[0].spec, "match");
   assertEquals(w1[0].data.recipeId, "git-status");
@@ -688,4 +692,111 @@ Deno.test("buildReply does not raise an issue for a failed recipe or a hint", ()
     pickConfidence: 0.9,
   });
   assertEquals(hint.action, "hint");
+});
+
+// ---- step 6: local config ----
+
+const LOCAL = parseConfig(`
+allow: ['@acme/*']
+recipes:
+  - id: gh-open-prs
+    extension: '@webframp/github'
+    method: list_prs
+    definition: github
+    dataName: prs
+    pattern: '^list the open prs in ([\\w.-]+/[\\w.-]+)$'
+    inputs: { repo: { capture: 1, as: repo } }
+    each: { path: items, line: '#{number} {title}' }
+    template: "{count} open:\\n{lines}"
+`);
+
+Deno.test("findMatch tries local recipes before the built-in ones", async () => {
+  const m = await findMatch(
+    "list the open PRs in puddle-works/puddleworks",
+    fakeExec({}).exec,
+    new Date(),
+    "puddlerouter:0123456789abcdef",
+    LOCAL,
+  );
+  assertEquals(m.kind, "recipe");
+  assertEquals(m.recipeId, "gh-open-prs");
+  assertEquals(m.captures, ["puddle-works/puddleworks"]);
+});
+
+Deno.test("findMatch offers extensions the file allows", async () => {
+  const { exec } = fakeExec({
+    "extension search": JSON.stringify({
+      extensions: [
+        { name: "@acme/hetzner", description: "acme" },
+        { name: "@other/hetzner", description: "other" },
+      ],
+    }),
+  });
+  const m = await findMatch(
+    "list the hetzner servers",
+    exec,
+    new Date(),
+    "",
+    LOCAL,
+  );
+  assertEquals(m.candidates.map((c) => c.name), ["@acme/hetzner"]);
+});
+
+Deno.test("executeRecipe runs a local recipe", async () => {
+  const { exec, calls } = fakeExec({
+    "behavior run @webframp/github list_prs github": JSON.stringify({
+      dataArtifacts: [{
+        name: "prs",
+        attributes: { items: [{ number: 4, title: "fix" }] },
+      }],
+    }),
+  });
+  const r = await executeRecipe(
+    "gh-open-prs",
+    ["puddle-works/puddleworks"],
+    exec,
+    "/repo",
+    LOCAL,
+  );
+  assertEquals(r, { ok: true, text: "1 open:\n#4 fix", error: "" });
+  assert(calls[0].includes("repo=puddle-works/puddleworks"));
+});
+
+Deno.test("executeRecipe refuses a capture of the wrong shape", async () => {
+  const r = await executeRecipe(
+    "gh-open-prs",
+    ["x; rm -rf /"],
+    fakeExec({}).exec,
+    "/repo",
+    LOCAL,
+  );
+  assertEquals(r.ok, false);
+  assertMatch(r.error, /bad input/);
+});
+
+Deno.test("match reads puddlerouter.yaml from the repo dir", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      `${dir}/puddlerouter.yaml`,
+      `recipes:\n  - id: my-status\n    extension: '@swamp/git'\n    method: status\n    definition: git\n    dataName: status\n    pattern: '^repo state$'\n    template: ok\n`,
+    );
+    const written: Written[] = [];
+    await model.methods.match.execute(
+      { text: "repo state", repoDir: dir },
+      fakeContext(written),
+    );
+    assertEquals(written[0].data.recipeId, "my-status");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("match without a puddlerouter.yaml uses the built-in recipes", async () => {
+  const written: Written[] = [];
+  await model.methods.match.execute(
+    { text: "git status", repoDir: "/nonexistent" },
+    fakeContext(written),
+  );
+  assertEquals(written[0].data.recipeId, "git-status");
 });

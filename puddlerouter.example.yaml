@@ -1,0 +1,29 @@
+# Copy to puddlerouter.yaml in the runtime repo (that file is gitignored).
+# A bad entry is dropped and logged; the rest of the file still applies.
+
+# Extension scopes or names to trust, on top of the defaults
+# (@swamp/*, @mesgme/*, @webframp/*, @puddleworks/*).
+allow:
+  - "@webframp/*"
+
+# Local recipes run before the built-in ones. Read-only methods only; the
+# turn must match `pattern` in full, and each captured piece must have the
+# declared shape (int, repo or word) before it becomes a method input.
+recipes:
+  - id: github-open-prs
+    extension: "@webframp/github"
+    method: list_prs
+    definition: github
+    # {repo} and {state} are inputs; "/" becomes "-" (the data is prs-owner-repo-open).
+    dataName: "prs-{repo}-{state}"
+    pattern: '^(?:list |show )?open (?:prs|pull requests) (?:in|for) ([\w.-]+/[\w.-]+)[?.!]?$'
+    readOnly: true
+    inputs:
+      repo: { capture: 1, as: repo }
+    fixed:
+      state: open
+    each:
+      path: pullRequests
+      line: "#{number} {title}"
+    template: "{count} open pull requests:\n{lines}"
+    empty: "No open pull requests."

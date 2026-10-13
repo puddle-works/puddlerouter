@@ -48,7 +48,7 @@ inputs:
     repoDir:
       type: string
       default: "."
-      description: The swamp repo a recipe's extension is pulled into.
+      description: The runtime swamp repo; recipes pull extensions into it and read its puddlerouter.yaml.
   required: [turnFile]
 jobs:
   - name: main
@@ -148,6 +148,7 @@ jobs:
           inputs:
             text: ${{ steps.load.outputs.text }}
             sourceRef: ${{ steps.load.outputs.sourceRef }}
+            repoDir: ${{ inputs.repoDir }}
       - name: pick
         description: >-
           Ask Jev which extension search found, if any, can answer the turn.
@@ -255,13 +256,13 @@ jobs:
             hookStartedAt: ${{ inputs.hookStartedAt }}
             sourceRef: ${{ steps.load.outputs.sourceRef }}
             choice: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.choice : "" }}'
-            confidence: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.confidence : 0.0 }}'
-            yes: '${{ has(steps.decide) && has(steps.decide.outputs) ? steps.decide.outputs.noul : null }}'
+            confidence: "${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.confidence : 0.0 }}"
+            yes: "${{ has(steps.decide) && has(steps.decide.outputs) ? steps.decide.outputs.noul : null }}"
             matchKind: '${{ has(steps.match) && has(steps.match.outputs) ? steps.match.outputs.kind : "none" }}'
             recipeId: '${{ has(steps.match) && has(steps.match.outputs) ? steps.match.outputs.recipeId : "" }}'
-            candidates: '${{ has(steps.match) && has(steps.match.outputs) ? steps.match.outputs.candidates : [] }}'
-            resultOk: '${{ has(steps.execute) && has(steps.execute.outputs) ? steps.execute.outputs.ok : false }}'
+            candidates: "${{ has(steps.match) && has(steps.match.outputs) ? steps.match.outputs.candidates : [] }}"
+            resultOk: "${{ has(steps.execute) && has(steps.execute.outputs) ? steps.execute.outputs.ok : false }}"
             resultText: '${{ has(steps.execute) && has(steps.execute.outputs) ? steps.execute.outputs.text : "" }}'
             pickChoice: '${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.choice : "" }}'
-            pickConfidence: '${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.confidence : 0.0 }}'
+            pickConfidence: "${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.confidence : 0.0 }}"
             issueUrl: '${{ has(steps.raise) && has(steps.raise.outputs) ? steps.raise.outputs.result : "" }}'

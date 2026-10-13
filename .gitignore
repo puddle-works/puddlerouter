@@ -12,3 +12,6 @@
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
 # END swamp managed section
+
+# Local recipes and allowlist (copy puddlerouter.example.yaml)
+puddlerouter.yaml

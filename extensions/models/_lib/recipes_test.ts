@@ -21,10 +21,12 @@ Deno.test("every recipe is read-only and from an allowed extension", () => {
   }
 });
 
-Deno.test("isAllowed accepts only @swamp and @mesgme", () => {
+Deno.test("isAllowed accepts the default scopes only", () => {
   assert(isAllowed("@swamp/git"));
   assert(isAllowed("@mesgme/hetzner-cloud-power"));
-  assert(!isAllowed("@webframp/github"));
+  assert(isAllowed("@webframp/github"));
+  assert(isAllowed("@puddleworks/puddlerouter"));
+  assert(!isAllowed("@hivemq/hetzner/servers"));
   assert(!isAllowed("@swampy/git"));
   assert(!isAllowed("swamp/git"));
 });

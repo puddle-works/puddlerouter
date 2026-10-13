@@ -7,6 +7,7 @@
  *
  * @module
  */
+import { isAllowed } from "./allowlist.ts";
 
 /** Result of running one `swamp` command. */
 export interface ExecResult {
@@ -27,6 +28,8 @@ export interface Recipe {
   definition: string;
   /** The data the method writes that holds the answer. */
   dataName: string;
+  /** The data name when it depends on the captures (e.g. one per repo). */
+  dataNameFor?: (captures: string[]) => string;
   pattern: RegExp;
   /** Only read-only recipes run unattended. */
   readOnly: true;
@@ -36,13 +39,7 @@ export interface Recipe {
   render: (attrs: Record<string, unknown>) => string;
 }
 
-/** Extensions that may be pulled and run without asking. */
-const ALLOWED = /^@(swamp|mesgme)\/[a-z0-9][a-z0-9/_-]*$/;
-
-/** True if the extension may be pulled and run unattended. */
-export function isAllowed(extension: string): boolean {
-  return ALLOWED.test(extension);
-}
+export { isAllowed };
 
 const MAX_LINES = 20;
 
@@ -144,9 +141,12 @@ export interface RecipeMatch {
 }
 
 /** The first recipe that matches the whole turn, or null. */
-export function matchRecipe(text: string): RecipeMatch | null {
+export function matchRecipe(
+  text: string,
+  recipes: Recipe[] = RECIPES,
+): RecipeMatch | null {
   const t = text.trim().replace(/\s+/g, " ");
-  for (const recipe of RECIPES) {
+  for (const recipe of recipes) {
     const m = recipe.pattern.exec(t);
     if (m) return { recipe, captures: m.slice(1) };
   }
@@ -202,13 +202,19 @@ export async function runRecipe(
   { recipe, captures }: RecipeMatch,
   exec: Exec,
   repoDir: string,
+  allow: (extension: string) => boolean = isAllowed,
 ): Promise<RecipeResult> {
-  if (!isAllowed(recipe.extension)) {
+  if (!allow(recipe.extension)) {
     throw new Error(`${recipe.extension} is not on the allowlist`);
   }
-  const inputs = Object.entries(recipe.inputs(captures)).flatMap((
-    [k, v],
-  ) => ["--input", `${k}=${v}`]);
+  let inputs: string[];
+  try {
+    inputs = Object.entries(recipe.inputs(captures)).flatMap((
+      [k, v],
+    ) => ["--input", `${k}=${v}`]);
+  } catch (e) {
+    return fail(`bad input: ${e instanceof Error ? e.message : e}`);
+  }
   const run = () =>
     exec([
       "behavior",
@@ -244,13 +250,17 @@ export async function runRecipe(
   } catch {
     return fail("swamp output was not JSON");
   }
-  const artifact = parsed.dataArtifacts?.find((a) =>
-    a.name === recipe.dataName
-  );
+  let dataName = recipe.dataName;
+  try {
+    dataName = recipe.dataNameFor?.(captures) ?? dataName;
+  } catch (e) {
+    return fail(`bad input: ${e instanceof Error ? e.message : e}`);
+  }
+  const artifact = parsed.dataArtifacts?.find((a) => a.name === dataName);
   if (
     !artifact || typeof artifact.attributes !== "object" || !artifact.attributes
   ) {
-    return fail(`no ${recipe.dataName} data`);
+    return fail(`no ${dataName} data`);
   }
   try {
     return {
