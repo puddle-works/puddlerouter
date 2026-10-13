@@ -467,5 +467,22 @@ runtime:
 | "what branch am I on" | block, "On branch main. Other branches: …" | recipe git-branch answered | 2,580 |
 | "list the hetzner servers in my account" | hint (a hint naming an extension; third-party ones are now filtered out) | extension …, no recipe | 4,760 |
 
-Not yet built: recipes from the local `recipes.yaml` and registry packs (step 6)
+Step 4 adds the third outcome below. Not yet built: recipes from the local `recipes.yaml` and registry packs (step 6)
 and GitHub recipes (waiting on a decision about `@webframp/github`).
+
+## Step 4: raise an issue when nothing can answer
+
+`@webframp/github` (a model definition `github` in `models/@webframp/github/`)
+already has `create_issue` with an idempotency key, so no extension of our own
+was needed (the plan expected to write one). In live mode only, when the route is
+`deterministic` and there is neither a recipe nor a confident allowlisted pick,
+the `raise` step calls `create_issue` on `puddle-works/puddleworks-apps` with a
+title `Recipe wanted: <first 80 characters>`, a body quoting the turn and what
+the search found, and the turn's `sourceRef` as the key. The reply blocks with
+the issue link. If `raise` fails, the turn passes. In shadow mode `raise` is
+skipped and the reply records `wouldAction: block` ("would raise an issue").
+
+Tested live from `~/dev/swamplab`: "what is the current weather in Utrecht" raised
+issue #95 and blocked; sending it again reused #95 (no second issue). #95 was
+closed afterwards with `close_issue`. `create_issue` takes no labels, so test
+issues are marked by their title rather than a `puddlerouter-test` label.
