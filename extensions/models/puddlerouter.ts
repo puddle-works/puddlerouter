@@ -16,7 +16,13 @@
  * @module
  */
 import { z } from "npm:zod@4";
-import { type Config, loadConfig, parseConfig } from "./_lib/config.ts";
+import {
+  type Config,
+  loadConfig,
+  parseConfig,
+  parseRecipe,
+} from "./_lib/config.ts";
+import { syncPacks } from "./_lib/packs.ts";
 import { allowPredicate } from "./_lib/allowlist.ts";
 import {
   type Exec,
@@ -148,6 +154,26 @@ export const ResultCacheSchema = z.object({
   cachedAt: z.iso.datetime(),
 });
 
+/** The recipes of the synced packs, as `sync` leaves them for `match`. */
+export const RecipeIndexSchema = z.object({
+  recipes: z.array(z.object({
+    pack: z.string(),
+    recipe: z.record(z.string(), z.unknown()),
+  })),
+  packs: z.array(z.object({ name: z.string(), version: z.string() })),
+  errors: z.array(z.string()),
+  syncedAt: z.iso.datetime(),
+});
+
+/** Arguments for `sync`. */
+export const SyncArgsSchema = z.object({
+  repoDir: z.string().min(1).default(".").describe(
+    "The swamp repo the packs are pulled into; its puddlerouter.yaml sets the allowlist.",
+  ),
+});
+/** The arguments `sync` accepts. */
+export type SyncArgs = z.infer<typeof SyncArgsSchema>;
+
 /** Arguments for `recall`. */
 export const RecallArgsSchema = z.object({
   sourceRef: z.string().describe("The turn's sourceRef; the route cache key."),
@@ -254,6 +280,8 @@ export const ROUTE_CACHE_VERSION = "v1";
 const DAY_MS = 24 * 3600 * 1000;
 const ROUTE_TTL_MS = 7 * DAY_MS;
 const SEARCH_TTL_MS = DAY_MS;
+/** The instance name of the one recipe index. */
+export const RECIPE_INDEX = "recipe-index";
 
 /** Where cache entries live: this model's own swamp resources. */
 export interface Store {
@@ -683,6 +711,44 @@ export async function findMatch(
   };
 }
 
+/**
+ * The config plus the recipes of the synced packs, after the local ones. A
+ * missing index adds nothing; a stale one is still used. A pack recipe that
+ * clashes, is no longer allowed or does not compile is dropped. `notes` says
+ * what was off; `match` never pulls.
+ */
+export async function withPacks(
+  config: Config,
+  store: Store,
+  now: Date = new Date(),
+): Promise<{ config: Config; notes: string[] }> {
+  const notes: string[] = [];
+  let raw: Record<string, unknown> | null = null;
+  try {
+    raw = await store.read(RECIPE_INDEX);
+  } catch { /* unreadable: no pack recipes */ }
+  if (raw === null) return { config, notes };
+  const index = RecipeIndexSchema.safeParse(raw);
+  if (!index.success) {
+    return { config, notes: ["recipe index is not valid; ignored"] };
+  }
+  if (!fresh(index.data.syncedAt, DAY_MS, now)) {
+    notes.push(
+      `recipe index is stale (synced ${index.data.syncedAt}); run the ` +
+        "puddlerouter-recipes-sync workflow",
+    );
+  }
+  const allowed = allowPredicate(config.allowlist);
+  const taken = new Set([...RECIPES, ...config.recipes].map((r) => r.id));
+  const recipes = [...config.recipes];
+  for (const { pack, recipe } of index.data.recipes) {
+    const parsed = parseRecipe(recipe, allowed, taken);
+    if ("error" in parsed) notes.push(`${pack}: ${parsed.error}`);
+    else recipes.push(parsed.recipe);
+  }
+  return { config: { ...config, recipes }, notes };
+}
+
 /** The result cache instance name for a recipe and its captures. */
 export async function resultCacheKey(
   recipeId: string,
@@ -896,7 +962,7 @@ function resourceStore(context: MethodContext): Store {
   };
 }
 
-/** The model type: `load`, `match`, `execute` and `reply`, one resource each. */
+/** The model type: `load`, `match`, `execute`, `sync` and `reply`. */
 export const model = {
   type: "@puddleworks/puddlerouter",
   version: "2026.10.13.2",
@@ -951,6 +1017,12 @@ export const model = {
       lifetime: "1d" as const,
       garbageCollection: 1,
     },
+    recipeIndex: {
+      description: "The recipes of the synced packs; `sync` writes it.",
+      schema: RecipeIndexSchema,
+      lifetime: "7d" as const,
+      garbageCollection: 1,
+    },
   },
   methods: {
     match: {
@@ -959,10 +1031,17 @@ export const model = {
       arguments: MatchArgsSchema,
       execute: async (args: MatchArgs, context: MethodContext) => {
         context.logger.info("Matching turn", {});
-        const config = await loadConfig(args.repoDir);
-        if (config.errors.length) {
+        const store = resourceStore(context);
+        const local = await loadConfig(args.repoDir);
+        if (local.errors.length) {
           context.logger.info("puddlerouter.yaml: {errors}", {
-            errors: config.errors.join("; "),
+            errors: local.errors.join("; "),
+          });
+        }
+        const { config, notes } = await withPacks(local, store);
+        if (notes.length) {
+          context.logger.info("recipe packs: {notes}", {
+            notes: notes.join("; "),
           });
         }
         const match = await findMatch(
@@ -971,13 +1050,46 @@ export const model = {
           new Date(),
           args.sourceRef,
           config,
-          resourceStore(context),
+          store,
         );
         const handle = await context.writeResource("match", "match", match);
         context.logger.info("Matched {kind} {recipeId}", {
           kind: match.kind,
           recipeId: match.recipeId,
         });
+        return { dataHandles: [handle] };
+      },
+    },
+    sync: {
+      description:
+        "Pull the recipe packs the allowlist covers and store their recipes as `recipeIndex`.",
+      arguments: SyncArgsSchema,
+      execute: async (args: SyncArgs, context: MethodContext) => {
+        context.logger.info("Syncing recipe packs", {});
+        const config = await loadConfig(args.repoDir);
+        const index = await syncPacks(
+          {
+            exec: swampExec,
+            readFile: (path) => Deno.readTextFile(path),
+            repoDir: args.repoDir,
+            now: new Date(),
+          },
+          allowPredicate(config.allowlist),
+        );
+        const handle = await context.writeResource(
+          "recipeIndex",
+          RECIPE_INDEX,
+          { ...index },
+        );
+        context.logger.info("Synced {packs} packs, {recipes} recipes", {
+          packs: index.packs.length,
+          recipes: index.recipes.length,
+        });
+        if (index.errors.length) {
+          context.logger.info("recipe packs: {errors}", {
+            errors: index.errors.join("; "),
+          });
+        }
         return { dataHandles: [handle] };
       },
     },
@@ -988,13 +1100,18 @@ export const model = {
         context.logger.info("Running recipe {recipeId}", {
           recipeId: args.recipeId,
         });
+        const store = resourceStore(context);
+        const { config } = await withPacks(
+          await loadConfig(args.repoDir),
+          store,
+        );
         const r = await executeRecipe(
           args.recipeId,
           args.captures,
           swampExec,
           args.repoDir,
-          await loadConfig(args.repoDir),
-          resourceStore(context),
+          config,
+          store,
         );
         const handle = await context.writeResource("result", "result", {
           recipeId: args.recipeId,

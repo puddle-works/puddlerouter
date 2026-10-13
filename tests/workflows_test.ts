@@ -209,3 +209,18 @@ Deno.test("the route cache version is set", async () => {
   );
   assert(/export const ROUTE_CACHE_VERSION = "v\d+"/.test(src));
 });
+
+Deno.test("the recipes sync workflow runs the sync method on a daily schedule and is published", async () => {
+  const file = "workflow-puddlerouter-recipes-sync.yaml";
+  const sync = await stepOf(file, "sync");
+  assertEquals(sync.task.modelIdOrName, "puddlerouter");
+  assertEquals(sync.task.methodName, "sync");
+  const wf = await readYaml(`workflows/${file}`) as {
+    name: string;
+    trigger: { schedule: string };
+  };
+  assertEquals(wf.name, "@puddleworks/puddlerouter-recipes-sync");
+  assertEquals(wf.trigger.schedule, "0 6 * * *");
+  const manifest = await readYaml("manifest.yaml") as { workflows: string[] };
+  assert(manifest.workflows.includes(file));
+});

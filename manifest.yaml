@@ -10,3 +10,4 @@ models:
   - puddlerouter.ts
 workflows:
   - workflow-puddlerouter.yaml
+  - workflow-puddlerouter-recipes-sync.yaml

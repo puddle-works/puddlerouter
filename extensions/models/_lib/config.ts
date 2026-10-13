@@ -138,6 +138,37 @@ function compile(r: LocalRecipe): Recipe {
   };
 }
 
+/**
+ * Check and compile one raw recipe (from the local file or a pack). On success
+ * its id is added to `taken`, so a later recipe with the same id is refused.
+ */
+export function parseRecipe(
+  raw: unknown,
+  allowed: (extension: string) => boolean,
+  taken: Set<string>,
+): { recipe: Recipe } | { error: string } {
+  const id = (raw as { id?: unknown })?.id;
+  const parsed = LocalRecipe.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const where = issue?.path.length ? `${issue.path.join(".")}: ` : "";
+    return { error: `recipe ${id}: ${where}${issue?.message}` };
+  }
+  const r = parsed.data;
+  if (taken.has(r.id)) return { error: `recipe ${r.id}: id already used` };
+  if (!allowed(r.extension)) {
+    return { error: `recipe ${r.id}: ${r.extension} is not allowed` };
+  }
+  let recipe: Recipe;
+  try {
+    recipe = compile(r);
+  } catch (e) {
+    return { error: `recipe ${r.id}: bad pattern (${(e as Error).message})` };
+  }
+  taken.add(r.id);
+  return { recipe };
+}
+
 /** Parse the file's text. Never throws. */
 export function parseConfig(text: string): Config {
   const config: Config = {
@@ -166,30 +197,9 @@ export function parseConfig(text: string): Config {
   const allowed = allowPredicate(config.allowlist);
   const taken = new Set(RECIPES.map((r) => r.id));
   for (const raw of Array.isArray(recipes) ? recipes : []) {
-    const id = (raw as { id?: unknown })?.id;
-    const parsed = LocalRecipe.safeParse(raw);
-    if (!parsed.success) {
-      config.errors.push(`recipe ${id}: ${parsed.error.issues[0]?.message}`);
-      continue;
-    }
-    const r = parsed.data;
-    if (taken.has(r.id)) {
-      config.errors.push(`recipe ${r.id}: id already used`);
-      continue;
-    }
-    if (!allowed(r.extension)) {
-      config.errors.push(`recipe ${r.id}: ${r.extension} is not allowed`);
-      continue;
-    }
-    try {
-      config.recipes.push(compile(r));
-    } catch (e) {
-      config.errors.push(
-        `recipe ${r.id}: bad pattern (${(e as Error).message})`,
-      );
-      continue;
-    }
-    taken.add(r.id);
+    const parsed = parseRecipe(raw, allowed, taken);
+    if ("error" in parsed) config.errors.push(parsed.error);
+    else config.recipes.push(parsed.recipe);
   }
   return config;
 }

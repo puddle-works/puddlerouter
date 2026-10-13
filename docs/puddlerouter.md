@@ -180,6 +180,7 @@ string, so any pattern fits. YAML quoting is the only care needed: write
 patterns in single quotes so `\d` and `\s` are not escapes. Confirming that the
 registry ships tags unchanged needs a publish, so it is checked with the first
 pack in step 6.
+**Checked in step 6c: tags come back byte for byte** (see below).
 
 **4b. Search can filter by label.** `swamp extension search` has `--label`.
 Checked live:
@@ -504,6 +505,7 @@ The plan's registry side of step 6 is deferred:
 - the `puddlerouter-recipes-sync` workflow and `recipeIndex`
 
 A fresh checkout therefore gets the built-in recipes, not registry packs.
+(Done in step 6c.)
 
 ## Step 6b: caches
 
@@ -546,3 +548,40 @@ Checked live in the larvacean-caches worktree (shadow mode, real Jev):
 The 1.2 s floor is swamp starting and the workflow's own steps. The deterministic
 route's cached `pick` (route cache seeded, since Jev gave no deterministic turn
 here) was not run with real Jev.
+
+## Step 6c: recipe packs, `recipeIndex` and the sync workflow
+
+The first pack is `@puddleworks/puddlerouter-recipes-github` (repo
+`puddle-works/puddlerouter-recipes-github`, private, label `puddlerouter-recipe`),
+one workflow per recipe. See the README, "Recipe packs", for the format.
+
+### Live checks of step 0 (closes check 4a)
+
+Published the pack as `2026.10.13.1`, then:
+
+| Check | Result |
+|---|---|
+| `swamp extension search --label puddlerouter-recipe --collective puddleworks --json` | finds the **private** pack (signed in as a puddleworks member); a plain `search puddlerouter-recipe` finds it too |
+| `swamp extension pull` in a fresh repo, then compare the tag | the `puddlerouterRecipe` tag, regex included, is identical to the source file |
+| `swamp workflow get <pulled workflow> --json` | sees the pulled workflow with its tags, inputs and step (swamp copies it to `workflows/workflow-<id>.yaml`) |
+| `swamp extension list --json` | gives each pack's `version` and `files`, including `workflows/*.yaml`, so sync reads the files and spawns no `workflow get` per recipe |
+
+`swamp extension pull` over an installed pack needs `--yes` when stdin is not a
+terminal, so `sync` passes it.
+
+### Decisions
+
+- **The tag names the extension.** A step names a model *definition*
+  (`github`), not the extension that holds its type, and `behavior run` needs the
+  type. The plan took it from the step; it cannot be, so the tag carries
+  `extension` (pack `2026.10.13.2`). The step still gives method, definition and
+  fixed inputs.
+- **`recipeIndex`** (instance `recipe-index`, 7 days) holds the checked raw
+  recipes, the packs and versions, the errors and `syncedAt`. `match` and
+  `execute` compile it with the same `parseRecipe` as the local file, against
+  the current allowlist, so a shrunk allowlist applies at once.
+- **Sync throws only when the registry cannot be searched**, so the old index
+  stays. Anything wrong with one pack, workflow or recipe is an entry in
+  `errors` and the rest still loads.
+- A pack name must pass the allowlist like an extension name, so a stranger's
+  pack labelled `puddlerouter-recipe` is never pulled.
