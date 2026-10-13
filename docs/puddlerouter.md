@@ -445,8 +445,8 @@ not Claude, in one of three ways.
    with the answer and the `llm:` footer. A failed recipe passes.
 2. **Extension hint.** With no recipe, `match` searches the local types and the
    registry (`swamp model type search`, `swamp extension search`, on the turn's
-   content words, never the whole turn), keeps only `@swamp/*` and `@mesgme/*`
-   (the allowlist), and Jev's `pick` step chooses one (or none) from up to three.
+   content words, never the whole turn), keeps only allowlisted extensions
+   (`@swamp/*`, `@mesgme/*`, `@webframp/*`, `@puddleworks/*`, plus the config's `allow:`), and Jev's `pick` step chooses one (or none) from up to three.
    A pick at or above the cut-off adds a hint telling Claude which extension to
    describe and use, and to ask the user about a "recipe wanted" issue (step 4
    will raise it).
@@ -486,3 +486,23 @@ Tested live from `~/dev/swamplab`: "what is the current weather in Utrecht" rais
 issue #95 and blocked; sending it again reused #95 (no second issue). #95 was
 closed afterwards with `close_issue`. `create_issue` takes no labels, so test
 issues are marked by their title rather than a `puddlerouter-test` label.
+
+## Step 6: local config and a wider allowlist
+
+The allowlist is now `@swamp/*`, `@mesgme/*`, `@webframp/*` and `@puddleworks/*`,
+and `puddlerouter.yaml` in the runtime repo can add more (`allow:`) and define
+local recipes (see the README, "Local config"). Local recipes run before the
+built-in ones, are read-only, and take only captures of a declared shape.
+Checked live: "open prs in puddle-works/puddlerouter" answered from a local
+`@webframp/github` `list_prs` recipe with no Claude call.
+
+### Not done in this step
+
+The plan's registry side of step 6 is deferred:
+
+- recipe packs published to the registry (a public pack needs explicit approval)
+- the `puddlerouter-recipes-sync` workflow and `recipeIndex`
+- the route, result and search caches, so "a repeated turn makes no Jev call"
+  is not yet true
+
+A fresh checkout therefore gets the built-in recipes, not registry packs.

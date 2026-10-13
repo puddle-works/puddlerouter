@@ -16,9 +16,10 @@
  * @module
  */
 import { z } from "npm:zod@4";
+import { type Config, loadConfig, parseConfig } from "./_lib/config.ts";
+import { allowPredicate } from "./_lib/allowlist.ts";
 import {
   type Exec,
-  isAllowed,
   matchRecipe,
   RECIPES,
   runRecipe,
@@ -80,6 +81,9 @@ export const MatchArgsSchema = z.object({
   text: z.string().describe("The cleaned turn text."),
   sourceRef: z.string().optional().describe(
     "The turn's sourceRef; the key of the issue raised for it.",
+  ),
+  repoDir: z.string().min(1).default(".").describe(
+    "The runtime repo; its puddlerouter.yaml adds allowlist entries and recipes.",
   ),
 });
 /** The arguments `match` accepts. */
@@ -393,7 +397,9 @@ export async function findMatch(
   exec: Exec,
   now: Date = new Date(),
   sourceRef = "",
+  config: Pick<Config, "allowlist" | "recipes"> = parseConfig(""),
 ): Promise<Match> {
+  const allow = allowPredicate(config.allowlist);
   const draft = (query: string, candidates: Match["candidates"]) => {
     const d = issueDraft(text, sourceRef, query, candidates);
     return { issueTitle: d.title, issueBody: d.body, issueKey: d.key };
@@ -405,7 +411,7 @@ export async function findMatch(
     candidates: [] as Match["candidates"],
     matchedAt: now.toISOString(),
   };
-  const hit = matchRecipe(text);
+  const hit = matchRecipe(text, [...config.recipes, ...RECIPES]);
   if (hit) {
     return {
       ...base,
@@ -447,7 +453,7 @@ export async function findMatch(
       if (typeof t?.raw === "string" && !found.has(t.raw)) found.set(t.raw, "");
     }
   }
-  const candidates = [...found].filter(([name]) => isAllowed(name)).slice(
+  const candidates = [...found].filter(([name]) => allow(name)).slice(
     0,
     MAX_CANDIDATES,
   ).map((
@@ -469,12 +475,18 @@ export async function executeRecipe(
   captures: string[],
   exec: Exec,
   repoDir: string,
+  config: Pick<Config, "allowlist" | "recipes"> = parseConfig(""),
 ): Promise<{ ok: boolean; text: string; error: string }> {
-  const recipe = RECIPES.find((r) => r.id === recipeId);
+  const recipe = [...config.recipes, ...RECIPES].find((r) => r.id === recipeId);
   if (!recipe) {
     return { ok: false, text: "", error: `unknown recipe ${recipeId}` };
   }
-  return await runRecipe({ recipe, captures }, exec, repoDir);
+  return await runRecipe(
+    { recipe, captures },
+    exec,
+    repoDir,
+    allowPredicate(config.allowlist),
+  );
 }
 
 /**
@@ -661,11 +673,18 @@ export const model = {
       arguments: MatchArgsSchema,
       execute: async (args: MatchArgs, context: MethodContext) => {
         context.logger.info("Matching turn", {});
+        const config = await loadConfig(args.repoDir);
+        if (config.errors.length) {
+          context.logger.info("puddlerouter.yaml: {errors}", {
+            errors: config.errors.join("; "),
+          });
+        }
         const match = await findMatch(
           args.text,
           swampExec,
           new Date(),
           args.sourceRef,
+          config,
         );
         const handle = await context.writeResource("match", "match", match);
         context.logger.info("Matched {kind} {recipeId}", {
@@ -687,6 +706,7 @@ export const model = {
           args.captures,
           swampExec,
           args.repoDir,
+          await loadConfig(args.repoDir),
         );
         const handle = await context.writeResource("result", "result", {
           recipeId: args.recipeId,

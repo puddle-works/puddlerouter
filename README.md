@@ -63,8 +63,26 @@ checked first:
   `--input k=v --literal-inputs`.
 - A search passes at most four words, each matching `[a-z0-9][a-z0-9_-]*` and
   three or more characters, from `searchQuery` in `_lib/recipes.ts`.
-- Only `@swamp/*` and `@mesgme/*` extensions are pulled or run (`isAllowed`),
-  and only recipes marked read-only.
+- Only allowlisted extensions are pulled or run (`@swamp/*`, `@mesgme/*`,
+  `@webframp/*`, `@puddleworks/*`, plus whatever `puddlerouter.yaml` adds), and
+  only recipes marked read-only.
+
+## Local config
+
+`<repoDir>/puddlerouter.yaml` (gitignored; copy `puddlerouter.example.yaml`) is
+read on every `match` and `execute`. It has two optional keys:
+
+- `allow:` extra extension names or `@scope/*` scopes. They add to the defaults.
+- `recipes:` local recipes, tried before the built-in ones. Fields: `id`,
+  `extension`, `method`, `definition`, `dataName`, `pattern` (must match the
+  whole turn), `readOnly` (only `true`), `inputs` (`name: {capture: 1..9, as:
+  int|repo|word}`), `fixed`, `each {path, line}`, `template` (`{count}`,
+  `{lines}` and any attribute path) and `empty`. `dataName` may use `{input}`
+  placeholders when the method names its data per input.
+
+A captured piece must fit its declared shape before it becomes a method input
+(run with `--literal-inputs`). A bad entry, an unreadable file or a recipe for
+an extension that is not allowed is dropped and logged; the rest still applies.
 
 ## Issues
 
