@@ -532,15 +532,17 @@ garbage-collects the data.
 - **Result cache.** Opt-in per local recipe with `cacheFor: 30s | 5m | 1h`. No
   built-in recipe sets it. Only a successful run is stored.
 
-Checked live in the larvacean-caches worktree (shadow mode). The Jev vault key
-is empty in that worktree, so the `route` step fails there; the route cache was
-therefore seeded with a `reply` run and the second step was checked from it:
+Checked live in the larvacean-caches worktree (shadow mode, real Jev):
 
-| Run | Steps | Result |
-|---|---|---|
-| "git status", route cached | `route`, `decide`, `pick` skipped; `match`, `execute` ran | `reply.cached` true, same route |
-| "list the hetzner servers", first | `match` ran both searches | 3.7 s |
-| "list the hetzner servers", repeat | `match` served from `searchCache` | 1.2 s |
+| Turn | Run | Steps | Time | Result |
+|---|---|---|---|---|
+| "is 7 a prime number?" | first | `route` ran | 2.1 s | route decision at 0.28, below the cut-off, so llm |
+| same | repeat | `route` skipped | 1.2 s | same answer, `reply.cached` true |
+| "Is the word 'banana' a fruit? Answer yes or no." | first | `route` and `decide` ran | 2.6 s | decision 0.92, yes 0.91, answered yes |
+| same | repeat | `route` and `decide` skipped | 1.2 s | same answer, `reply.cached` true |
+| "list the hetzner servers" | first | `match` ran both searches | 3.7 s | |
+| same | repeat | `match` served from `searchCache` | 1.2 s | |
 
-Not yet checked live: a repeated turn with real Jev answers (needs the vault key
-in the runtime clone), and the decision turn twice.
+The 1.2 s floor is swamp starting and the workflow's own steps. The deterministic
+route's cached `pick` (route cache seeded, since Jev gave no deterministic turn
+here) was not run with real Jev.
