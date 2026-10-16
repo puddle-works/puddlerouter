@@ -121,11 +121,27 @@ function assertSilentPass(run: HookRun) {
   assertEquals(run.stdout, "");
 }
 
+/** Text as Claude Code marks a paste in the prompt. */
+function pasted(text: string, id = "ab12"): string {
+  return `<pasted_content id="${id}">\n${text}\n</pasted_content id="${id}">`;
+}
+
 for (
   const [what, prompt, env] of [
     ["a slash command", "/review", {}],
     ["an llm: prefix", "LLM: list the open PRs", {}],
     ["a tagged message from the harness", "<task-notification>done", {}],
+    ["a prompt that is only pasted text", `\n\n${pasted("## Continue")}\n`, {}],
+    [
+      "a tagged message after pasted text",
+      `${pasted("notes")}\n<task-notification>done`,
+      {},
+    ],
+    [
+      "typed text over 2,000 characters beside a paste",
+      `${pasted("notes")}\n${"a".repeat(2001)}`,
+      {},
+    ],
     ["a bash-mode prompt", "! ls", {}],
     ["an empty prompt", "   \n ", {}],
     ["a prompt over 2,000 characters", "a".repeat(2001), {}],
@@ -147,6 +163,27 @@ Deno.test("does not count surrounding whitespace towards the limit", async () =>
   });
   assertSilentPass(run);
   assertEquals(run.calls.length, 1);
+});
+
+Deno.test("runs a turn that starts with pasted text", async () => {
+  const prompt = `\n\n${
+    pasted("fix stuff")
+  }\n\nis this a good commit message?\n`;
+  const run = await runHook(prompt, {}, { waitForSwamp: true });
+  assertSilentPass(run);
+  assertEquals(run.calls.length, 1);
+  assertEquals(
+    run.turn,
+    `${pasted("fix stuff")}\n\nis this a good commit message?`,
+  );
+});
+
+Deno.test("does not count pasted text towards the limit", async () => {
+  const prompt = `is this a good summary? ${pasted("a".repeat(5000))}`;
+  const run = await runHook(prompt, {}, { waitForSwamp: true });
+  assertSilentPass(run);
+  assertEquals(run.calls.length, 1);
+  assertEquals(run.turn, prompt);
 });
 
 Deno.test("shadow mode runs the workflow with only the turn file's path", async () => {

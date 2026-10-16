@@ -25,6 +25,7 @@ findings.
 prompt ─▶ hooks/puddlerouter.sh
            skips /commands, ! shell turns, "llm:" prefix, turns starting
            with "<", turns over 2,000 characters, PUDDLEROUTER=off
+           (judged on the typed text: pasted blocks don't count)
            writes the turn to a mktemp file; passes only its path
         ─▶ swamp workflow run @puddleworks/puddlerouter --input turnFile=<path>
              load   strip pasted and fenced blocks, cap, hash (sourceRef) → turn;

@@ -1,7 +1,7 @@
 {
   "extension": "@puddleworks/puddlerouter",
   "version": "2026.10.13.2",
-  "reviewedAt": "2026-10-13T14:40:00Z",
+  "reviewedAt": "2026-10-16T15:30:51Z",
   "dimensions": [
     {
       "id": "credentials-secrets",
@@ -41,7 +41,7 @@
     {
       "id": "published-surface-hygiene",
       "verdict": "pass",
-      "note": "Manifest publishes README, LICENSE, the model and the router workflow (not the eval workflows). README has no IPs, hostnames, account ids or personal paths; private visibility. The manifest now also publishes the recipes-sync workflow; its README section names no host, account or personal path."
+      "note": "Manifest publishes README, LICENSE, the model and the router workflow (not the eval workflows). README has no IPs, hostnames, account ids or personal paths; private visibility. The manifest now also publishes the recipes-sync workflow; its README section names no host, account or personal path. Re-reviewed 2026-10-16: since the 2026-10-13 review only README.md changed (the status line, and a note that the hook judges its skip rules on the typed text); the model, the _lib files, both published workflows and the manifest are unchanged, so every other verdict stands. The changed lines name no IP, host, account or personal path."
     },
     {
       "id": "schema-strictness",

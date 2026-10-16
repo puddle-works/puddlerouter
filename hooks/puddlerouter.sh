@@ -25,6 +25,10 @@
 # Skipped without calling swamp: empty turns, /commands, `!` shell turns,
 # an `llm:` prefix, turns starting with `<` (messages from the harness, such
 # as background task reports), and turns over 2,000 characters after trimming.
+# These rules look at the typed text only: `<pasted_content>` blocks are left
+# out, so a turn that is only a paste is skipped and a long paste doesn't
+# count towards the limit. The turn file still holds the whole turn; `load`
+# strips the pastes.
 
 set -u
 exec 2>/dev/null
@@ -44,10 +48,14 @@ command -v "$SWAMP" >/dev/null || exit 0
 
 # The trimmed prompt, or nothing if this turn is skipped.
 prompt=$(jq -r --argjson max "$MAX_CHARS" '
-  (.prompt // "") | gsub("^\\s+|\\s+$"; "") as $p
-  | if $p == "" or ($p | length) > $max
-      or ($p | test("^(/|!|<)"))
-      or ($p | test("^llm:"; "i"))
+  def trim: gsub("^\\s+|\\s+$"; "");
+  (.prompt // "") | trim as $p
+  | $p
+  | gsub("<pasted_content id=\"[^\"]*\">[\\s\\S]*?(</pasted_content id=\"[^\"]*\">|\\z)"; "")
+  | trim as $typed
+  | if $typed == "" or ($typed | length) > $max
+      or ($typed | test("^(/|!|<)"))
+      or ($typed | test("^llm:"; "i"))
     then empty else $p end
 ') || exit 0
 [ -n "$prompt" ] || exit 0
