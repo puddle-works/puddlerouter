@@ -75,7 +75,8 @@ Claude Code 2.1.296.
   another session sends a message. Nothing in the input marks these. The hook
   skips any prompt whose first non-blank character is `<`, which covers
   subagent reports wrapped in tags such as `<task-notification>`, and `load`
-  strips `<pasted_content>` blocks. A scheduled task whose prompt is plain text
+  strips `<pasted_content>` blocks. (Since issue #6 the hook leaves
+  `<pasted_content>` blocks out before this check; see "In the shadow log".) A scheduled task whose prompt is plain text
   can't be told apart; in shadow mode it is only logged. Step 1's week of logs
   shows whether these need another rule.
 - **A block answer is shown, not read.** `reason` reaches the user only, so a
@@ -277,14 +278,17 @@ To fill in after a week of shadow mode, with the queries in the README. Label
 a sample of turns by hand (as in `route-eval/turns.yaml`) and score Jev at the
 0.7 cut-off.
 
+Partly filled in on 2026-10-16 for issue #6, from about three days of turns;
+the rest waits for the full week.
+
 | Measure | Value |
 |---|---|
-| Dates | |
-| Turns routed | |
-| Routes (deterministic / decision / llm) | |
+| Dates | 2026-10-13 09:24 to 2026-10-16 15:00 (partial) |
+| Turns routed | 157 |
+| Routes (deterministic / decision / llm) | 15 / 0 / 142 |
 | Accuracy on the labelled sample | |
 | `llm` turns sent elsewhere | |
-| Delay, median / 95th percentile (`elapsedMs`) | |
+| Delay, median / 95th percentile (`elapsedMs`) | 1,902 ms / 4,953 ms |
 | Turns that are not typed (scheduled tasks, agent reports) | |
 
 ## Step 2: decision route
@@ -433,6 +437,69 @@ Live mode, run in this repo with the hook
 A decision turn costs about 0.5 s more than other turns (the second Jev call).
 Live mode then reads the reply (about 1.2 s), so a blocked decision appears
 about 3 s after the prompt is sent, inside the hook's 20 s timeout.
+
+### In the shadow log (issue #6)
+
+Checked 2026-10-16 over the 157 turns from 2026-10-13 09:24 to 2026-10-16
+15:00, with the README queries.
+
+**No turn took the decision route.** Jev picked `decision` six times, all
+below the 0.7 cut-off, so each was recorded as `llm`:
+
+| Turn | Confidence |
+|---|---|
+| "no - bevause this was an earlier session that also ignored the instruction not to proceed" | 0.59 |
+| "so it's swamp native code?" | 0.48 |
+| "I feel like 91 is done no?" | 0.46 |
+| "Do you want me to remove the merged step 6 worktree and branch? yes" | 0.40 |
+| "so it's not currently looking at what is available in swamp?" | 0.31 |
+| "is it possible to publish using puddleworks? What is wrong with mesgme plan - Publishing: …" | 0.22 |
+
+All six are about the conversation, the risk found in "Questions about the
+conversation", and `llm` was right for each. None of the 157 turns asks for a
+yes/no judgement about text given in the turn, so `decision` is rare because
+such turns are rare in a working session, not because Jev misses them.
+Widening the criteria would only let in more turns like these.
+
+**The six as eval turns.** They are now t31–t36 in
+[`route-eval/turns.yaml`](route-eval/turns.yaml), labelled `llm`. Two runs of
+`puddlerouter-route-eval` over all 36 turns (`55047a09`, `5760604d`):
+
+| Turn | Jev | Confidence |
+|---|---|---|
+| t31 "no - bevause this was an earlier session…" | decision | 0.62, 0.66 |
+| t32 "so it's swamp native code?" | decision | 0.45, 0.43 |
+| t33 "I feel like 91 is done no?" | decision | 0.51, 0.45 |
+| t34 "Do you want me to remove…? yes" | decision | 0.25, 0.34 |
+| t35 "so it's not currently looking at…" | decision | 0.34, 0.37 |
+| t36 "is it possible to publish using puddleworks? …" | decision | 0.23, 0.28 |
+
+t01–t30 gave the same routes as step 0 (t06 at 0.66–0.67 is still the only
+miss at 0.7), so the score at the 0.7 cut-off is 35/36 in both runs. Jev's top
+choice is wrong for all six real turns; only the cut-off keeps them out. t31,
+which is not even a question, came within 0.04 of it. So the route cut-off
+must not go below 0.7, and if the decision criterion is ever reworded, t31–t36
+show whether the margin grew.
+
+**Pasted turns were never logged.** Every one of the 157 turns has
+`pasted: 0` and `fenced: 0`, so the shadow log could not show whether
+stripping pasted text hides what a decision turn is about. The 18 pasted
+turns in the same period (from Claude Code's transcripts) all started with
+`<pasted_content`, which the hook skipped as a harness message, and 17 were
+over the 2,000-character limit. All 18 were only a paste, with nothing typed,
+so none could have been a decision turn. A turn such as "is this a good commit
+message?" after a long paste would have been skipped the same way, so the hook
+now applies its skip rules to the typed text only: a `<pasted_content>` block
+doesn't count as a leading `<` or towards the limit, and a turn that is only a
+paste is skipped. `load` still strips the paste before anything reaches Jev.
+Checked live with the hook in this repo: a pasted block followed by "is this a
+good commit message?" was routed `decision` at 0.82, stored with `pasted: 1`
+and `complete: false`, and passed with the reason `decision text not in the
+turn`.
+
+**Decision:** keep `decision` as it is and look again at step 5, when a full
+week of shadow data, now including pasted turns, shows whether a decision
+turn ever reaches the cut-off.
 
 ## Step 3: deterministic route
 

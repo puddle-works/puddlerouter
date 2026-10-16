@@ -1,6 +1,6 @@
-# Hand-labelled turns for the step 0 route check. Each turn is something a
-# person might type into Claude Code; `route` is the answer the router should
-# give:
+# Hand-labelled turns for the step 0 route check (t01-t30), plus real turns
+# from the shadow log (t31 on). Each turn is something a person might type
+# into Claude Code; `route` is the answer the router should give:
 #
 #   deterministic  code can do it exactly (a swamp extension could run it)
 #   decision       a yes/no judgement Jev can answer from the text alone
@@ -104,4 +104,26 @@ turns:
     route: llm
   - id: t30
     text: summarise what changed in the last week across puddle-works repos and what I should look at first
+    route: llm
+
+  # llm: real yes/no questions about the conversation, which Jev can't see.
+  # Jev picked decision for each in the shadow log (2026-10-13 to 16), below
+  # the cut-off (issue #6). Kept as typed.
+  - id: t31
+    text: "no - bevause this was an earlier session that also ignored the instruction not to proceed"
+    route: llm
+  - id: t32
+    text: so it's swamp native code?
+    route: llm
+  - id: t33
+    text: I feel like 91 is done no?
+    route: llm
+  - id: t34
+    text: Do you want me to remove the merged step 6 worktree and branch? yes
+    route: llm
+  - id: t35
+    text: so it's not currently looking at what is available in swamp?
+    route: llm
+  - id: t36
+    text: "is it possible to publish using puddleworks?  What is wrong with mesgme plan - Publishing: you still need to choose between upgrading the @mesgme plan or setting visibility: public in manifest.yaml. You also need to either add the CI secrets or leave the publish job failing. Neither blocks the hook."
     route: llm
