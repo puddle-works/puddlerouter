@@ -155,6 +155,20 @@ Deno.test("runRecipe runs the method with literal inputs and renders status", as
   assertEquals(out.text, "2 changed files:\n M a.ts\n?? b/");
 });
 
+Deno.test("runRecipe ignores auto_resolve event lines before the JSON result", async () => {
+  const events = [
+    '{"event":"auto_resolve","status":"searching","type":"@swamp/git"}',
+    '{"event":"auto_resolve","status":"installed","extension":"@swamp/git"}',
+  ].join("\n");
+  const out = await runRecipe(
+    matchRecipe("git status")!,
+    fakeExec(`${events}\n${JSON.stringify(STATUS, null, 2)}`, []),
+    "/runtime",
+  );
+  assertEquals(out.ok, true);
+  assertEquals(out.text, "2 changed files:\n M a.ts\n?? b/");
+});
+
 Deno.test("runRecipe passes the commit count and renders the log", async () => {
   const calls: string[][] = [];
   const out = await runRecipe(

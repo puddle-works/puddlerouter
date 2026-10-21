@@ -183,6 +183,17 @@ export interface RecipeResult {
   error: string;
 }
 
+/**
+ * Swamp prints one-line `{"event": …}` progress lines (auto_resolve) before
+ * the JSON result when it installs a missing extension; drop them.
+ */
+function withoutEvents(stdout: string): string {
+  const lines = stdout.split("\n");
+  let i = 0;
+  while (i < lines.length && /^\{"event":.*\}\s*$/.test(lines[i])) i++;
+  return lines.slice(i).join("\n");
+}
+
 const fail = (error: string): RecipeResult => ({ ok: false, text: "", error });
 
 function errorCode(res: ExecResult): string {
@@ -248,7 +259,7 @@ export async function runRecipe(
   if (res.code !== 0) return fail(`swamp exited ${res.code}`);
   let parsed: { dataArtifacts?: Array<{ name: string; attributes?: unknown }> };
   try {
-    parsed = JSON.parse(res.stdout);
+    parsed = JSON.parse(withoutEvents(res.stdout));
   } catch {
     return fail("swamp output was not JSON");
   }
