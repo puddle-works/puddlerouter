@@ -278,18 +278,68 @@ To fill in after a week of shadow mode, with the queries in the README. Label
 a sample of turns by hand (as in `route-eval/turns.yaml`) and score Jev at the
 0.7 cut-off.
 
-Partly filled in on 2026-10-16 for issue #6, from about three days of turns;
-the rest waits for the full week.
+Filled in on 2026-10-21 from the full week. No turns were routed from 17 to
+20 October (Claude Code was barely used), so the week ends on Friday 16th.
+The labelled turns are kept out of this repo, because they quote what the
+owner typed and the repo is public; only the figures are here.
 
 | Measure | Value |
 |---|---|
-| Dates | 2026-10-13 09:24 to 2026-10-16 15:00 (partial) |
-| Turns routed | 157 |
-| Routes (deterministic / decision / llm) | 15 / 0 / 142 |
-| Accuracy on the labelled sample | |
-| `llm` turns sent elsewhere | |
-| Delay, median / 95th percentile (`elapsedMs`) | 1,902 ms / 4,953 ms |
-| Turns that are not typed (scheduled tasks, agent reports) | |
+| Dates | 2026-10-13 09:24 to 2026-10-16 17:23 |
+| Turns routed | 173 (168 shadow, 5 live while testing on 13 October) |
+| Routes (deterministic / decision / llm) | 15 / 0 / 158 |
+| Accuracy on the labelled sample | 163 / 173 (94%), all turns labelled; 160 / 165 (97%) leaving out the 8 marked unsure |
+| `llm` turns sent elsewhere | 0 of 148 |
+| Delay, median / 95th percentile (`elapsedMs`) | 1,905 ms / 4,927 ms (deterministic turns 4,927 ms median, `llm` 1,882 ms) |
+| Turns that are not typed (scheduled tasks, agent reports) | None. 39 (23%) were Claude Code prompt suggestions accepted as offered |
+
+**How the turns were labelled.** By the rules in `route-eval/turns.yaml`: a
+turn is `deterministic` if code could do it exactly from the turn's own text,
+`decision` if it is a yes/no judgement about text in the turn, and `llm`
+otherwise. A turn that leans on the conversation (a "yes" to Claude's
+suggestion, a follow-up question) is `llm`. Lookups the owner wants as recipes
+(task lists, CI checks, the shadow stats) are `deterministic`, and so are
+fully stated changes (creating a repo, logging a task), marked `write: true`
+because recipes are read-only. Eight labels could go either way and are marked
+`unsure`.
+
+**No turn would have been taken from Claude wrongly.** All 15 deterministic
+routes were right, and none of the 148 turns labelled `llm` went anywhere
+else. Live mode would therefore have blocked only turns a recipe or a "Recipe
+wanted" issue was meant for.
+
+**The ten misses all failed open.** Each is a `deterministic` turn that went
+to `llm`, so Claude ran as it would without the router:
+
+| Kind of turn | Jev | Confidence |
+|---|---|---|
+| list a repo's open pull requests | (none: the Jev call failed) | 0 |
+| list the next few tasks | deterministic | 0.66 |
+| log a task (`write`) | llm | 0.66 |
+| look up a shell alias | llm | 0.59 |
+| show the shadow log's deterministic turns (unsure) | llm | 0.53 |
+| look up a software release (unsure) | deterministic | 0.33 |
+| pull a clone (unsure, `write`) | llm | 0.33 |
+| log a task (`write`) | deterministic | 0.30 |
+| list the shadow log's turns by route (unsure) | llm | 0.09 |
+| check a CLI command exists (unsure) | deterministic | 0.09 |
+
+Only the task list came close to the cut-off. Four of the misses open with a
+conversational word (a reply to Claude, or a reaction), and three of those
+four are among the lowest confidences.
+
+**No turn is a `decision`.** The six turns Jev picked `decision` for are the
+ones under "In the shadow log (issue #6)"; all are about the conversation,
+and the 16 turns after that check added none.
+
+**Not typed.** The hook only sees turns submitted at the prompt, so no
+scheduled task or agent report reached it. Matching each turn to Claude Code's
+transcripts (`promptSource`) gives 114 typed, 39 accepted prompt suggestions,
+7 queued while Claude was busy and 13 with no matching prompt (including 4 of
+the 5 live-mode test turns). The accepted suggestions are text Claude wrote
+and the owner sent unchanged, mostly short go-aheads, and 4 of the 15
+deterministic routes came from them (a CI check and a repo creation among
+them).
 
 ## Step 2: decision route
 
