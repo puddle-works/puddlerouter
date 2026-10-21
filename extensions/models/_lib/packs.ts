@@ -11,7 +11,7 @@
  *
  * @module
  */
-import { parse } from "jsr:@std/yaml@1";
+import { parse } from "jsr:@std/yaml@1.3.0";
 import { parseRecipe } from "./config.ts";
 import { type Exec, RECIPES } from "./recipes.ts";
 

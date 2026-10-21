@@ -25,7 +25,7 @@
  *
  * @module
  */
-import { parse } from "jsr:@std/yaml@1";
+import { parse } from "jsr:@std/yaml@1.3.0";
 import { z } from "npm:zod@4";
 import { allowPredicate, DEFAULT_ALLOWLIST, isEntry } from "./allowlist.ts";
 import { type Recipe, RECIPES } from "./recipes.ts";

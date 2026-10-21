@@ -5,7 +5,7 @@
  * Run with: make test
  */
 import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
-import { stringify } from "jsr:@std/yaml@1";
+import { stringify } from "jsr:@std/yaml@1.3.0";
 import { allowPredicate, DEFAULT_ALLOWLIST } from "./config.ts";
 import { recipeFromWorkflow, syncPacks } from "./packs.ts";
 

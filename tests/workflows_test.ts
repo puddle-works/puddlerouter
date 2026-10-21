@@ -4,7 +4,7 @@
  * Run with: make test
  */
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { parse } from "jsr:@std/yaml@1";
+import { parse } from "jsr:@std/yaml@1.3.0";
 
 interface Step {
   name: string;
