@@ -3,7 +3,6 @@
     "version": "2026.09.15.1",
     "pulledAt": "2026-10-13T08:43:50.875Z",
     "files": [
-      ".swamp/bundles/beb8a56c/typesafe_ai.js",
       ".swamp/pulled-extensions/@swamp/typesafe-ai/files/LICENSE.txt",
       ".swamp/pulled-extensions/@swamp/typesafe-ai/files/README.md",
       ".swamp/pulled-extensions/@swamp/typesafe-ai/manifest.yaml",
@@ -19,7 +18,6 @@
     "version": "2026.09.28.1",
     "pulledAt": "2026-10-13T11:01:57.159Z",
     "files": [
-      ".swamp/bundles/2b63a75e/git.js",
       ".swamp/pulled-extensions/@swamp/git/files/LICENSE.txt",
       ".swamp/pulled-extensions/@swamp/git/files/README.md",
       ".swamp/pulled-extensions/@swamp/git/manifest.yaml",
@@ -40,8 +38,6 @@
     "version": "2026.10.12.1",
     "pulledAt": "2026-10-13T11:22:53.851Z",
     "files": [
-      ".swamp/bundles/9d92b9c9/github/repos.js",
-      ".swamp/bundles/9d92b9c9/github/triage.js",
       ".swamp/pulled-extensions/@webframp/github/files/LICENSE.md",
       ".swamp/pulled-extensions/@webframp/github/files/README.md",
       ".swamp/pulled-extensions/@webframp/github/manifest.yaml",
@@ -50,6 +46,20 @@
     ],
     "checksum": "39f1e7a156b7fc3c0a5a8d2b641a1b37b232189684a59fd14cbce673107bddc2",
     "filesChecksum": "d59f7eb74beaa3cf3616422ea810e1a8b4ace8550a8a1b6c7aaf8fce57fdb8d5",
+    "serverUrl": "https://swamp-club.com",
+    "publishedChannel": "stable"
+  },
+  "@puddleworks/puddlerouter-recipes-github": {
+    "version": "2026.10.13.2",
+    "pulledAt": "2026-10-13T15:06:36.473Z",
+    "files": [
+      ".swamp/pulled-extensions/@puddleworks/puddlerouter-recipes-github/files/LICENSE",
+      ".swamp/pulled-extensions/@puddleworks/puddlerouter-recipes-github/files/README.md",
+      ".swamp/pulled-extensions/@puddleworks/puddlerouter-recipes-github/manifest.yaml",
+      ".swamp/pulled-extensions/@puddleworks/puddlerouter-recipes-github/workflows/workflow-github-open-prs.yaml"
+    ],
+    "checksum": "538120b9fcd75ee62067a763e399295951de5a44bf1e4202c43ce888442b91b2",
+    "filesChecksum": "8d8c43814f08587d7627aa859d1e64b1a47b9846ba96e1899b01976275e0571d",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
   }
