@@ -11,3 +11,4 @@ models:
 workflows:
   - workflow-puddlerouter.yaml
   - workflow-puddlerouter-recipes-sync.yaml
+  - workflow-puddlerouter-key-check.yaml

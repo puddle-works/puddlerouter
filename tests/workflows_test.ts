@@ -224,3 +224,34 @@ Deno.test("the recipes sync workflow runs the sync method on a daily schedule an
   const manifest = await readYaml("manifest.yaml") as { workflows: string[] };
   assert(manifest.workflows.includes(file));
 });
+
+Deno.test("the key check lists Jev's models daily and raises one issue per outage", async () => {
+  const file = "workflow-puddlerouter-key-check.yaml";
+  const check = await stepOf(file, "check");
+  assertEquals(check.task.modelIdOrName, "jev");
+  assertEquals(check.task.methodName, "models");
+  assertEquals(check.allowFailure, true);
+  const raise = await stepOf(file, "raise");
+  assertEquals(raise.task.modelIdOrName, "github");
+  assertEquals(raise.task.methodName, "create_issue");
+  assert(
+    raise.dependsOn?.some((d) =>
+      d.step === "check" && d.condition.type === "failed"
+    ),
+  );
+  const inputs = raise.task.inputs as Record<string, string>;
+  assert(inputs.repo.includes("inputs.repo"));
+  // A successful check stores a new version of jev's models data, so the key
+  // changes after each recovery and stays the same during an outage.
+  assert(inputs.idempotencyKey.includes('data.listVersions("jev", "models")'));
+  const wf = await readYaml(`workflows/${file}`) as {
+    name: string;
+    trigger: { schedule: string };
+    inputs: { properties: { repo: { default: string } } };
+  };
+  assertEquals(wf.name, "@puddleworks/puddlerouter-key-check");
+  assertEquals(wf.trigger.schedule, "0 8 * * *");
+  assertEquals(wf.inputs.properties.repo.default, "puddle-works/puddlerouter");
+  const manifest = await readYaml("manifest.yaml") as { workflows: string[] };
+  assert(manifest.workflows.includes(file));
+});

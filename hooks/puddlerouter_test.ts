@@ -55,7 +55,8 @@ async function waitFor(path: string, ms: number): Promise<boolean> {
 async function runHook(
   prompt: string | null,
   env: Record<string, string> = {},
-  opts: { waitForSwamp?: boolean; stdin?: string } = {},
+  opts: { waitForSwamp?: boolean; waitForCall?: boolean; stdin?: string } =
+    {},
 ): Promise<HookRun> {
   const dir = await Deno.makeTempDir({ prefix: "puddlerouter-hook-test" });
   try {
@@ -84,6 +85,7 @@ async function runHook(
         FAKE_SWAMP_REPLY: "pass",
         FAKE_SWAMP_TEXT: "",
         TMPDIR: dir,
+        PUDDLEROUTER_KEY_CHECK: "off",
         ...env,
       },
     }).spawn();
@@ -93,6 +95,7 @@ async function runHook(
     const out = await child.output();
     const ms = Date.now() - started;
     if (opts.waitForSwamp) await waitFor(`${log}.turn`, 3000);
+    if (opts.waitForCall) await waitFor(`${log}.args`, 3000);
     // Let a detached run finish removing its turn file.
     await new Promise((r) => setTimeout(r, 200));
     const read = async (p: string) => {
@@ -326,4 +329,47 @@ Deno.test("the hook tells the workflow which repo recipes pull extensions into",
   assertEquals(run.code, 0);
   assertMatch(run.calls[0], /--input repoDir=\S+/);
   assertMatch(run.calls[0], /--repo-dir (\S+) .*--input repoDir=\1(\s|$)/);
+});
+
+const KEY_CHECK = /^workflow run @puddleworks\/puddlerouter-key-check --repo-dir \S+$/;
+
+Deno.test("starts the key check in the background on the first turn of the day", async () => {
+  const state = await Deno.makeTempDir();
+  try {
+    const run = await runHook("/review", {
+      PUDDLEROUTER_KEY_CHECK: "on",
+      PUDDLEROUTER_STATE: state,
+      FAKE_SWAMP_HANG: "1",
+    }, { waitForCall: true });
+    assertSilentPass(run);
+    assert(run.ms < 2000, `took ${run.ms} ms`);
+    assertEquals(run.calls.length, 1);
+    assertMatch(run.calls[0], KEY_CHECK);
+  } finally {
+    await Deno.remove(state, { recursive: true });
+  }
+});
+
+Deno.test("runs the key check at most once a day", async () => {
+  const state = await Deno.makeTempDir();
+  try {
+    const env = { PUDDLEROUTER_KEY_CHECK: "on", PUDDLEROUTER_STATE: state };
+    await runHook("/review", env, { waitForCall: true });
+    const again = await runHook("/review", env);
+    assertSilentPass(again);
+    assertEquals(again.calls, []);
+  } finally {
+    await Deno.remove(state, { recursive: true });
+  }
+});
+
+Deno.test("PUDDLEROUTER_KEY_CHECK=off skips the key check", async () => {
+  const state = await Deno.makeTempDir();
+  try {
+    const run = await runHook("/review", { PUDDLEROUTER_STATE: state });
+    assertSilentPass(run);
+    assertEquals(run.calls, []);
+  } finally {
+    await Deno.remove(state, { recursive: true });
+  }
 });
