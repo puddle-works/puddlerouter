@@ -21,10 +21,19 @@
 #   PUDDLEROUTER_REPO        swamp repo to run in (default ~/dev/puddlerouter)
 #   PUDDLEROUTER_TIMEOUT     live mode: seconds to wait for swamp (default 15)
 #   PUDDLEROUTER_SWAMP       swamp binary (default swamp; tests use a fake)
+#   PUDDLEROUTER_KEY_CHECK=off  skip the daily key check
+#   PUDDLEROUTER_STATE       where the key check's day stamp is kept
+#                            (default ~/.local/state/puddlerouter)
 #
-# Skipped without calling swamp: empty turns, /commands, `!` shell turns,
-# an `llm:` prefix, turns starting with `<` (messages from the harness, such
-# as background task reports), and turns over 2,000 characters after trimming.
+# Key check: the first turn of each day, skipped or not, also starts the
+# `@puddleworks/puddlerouter-key-check` workflow in the background. It raises
+# an issue when Jev's key stops working, which this hook would otherwise
+# hide by failing open.
+#
+# Not routed (swamp is called for the key check only): empty turns,
+# /commands, `!` shell turns, an `llm:` prefix, turns starting with `<`
+# (messages from the harness, such as background task reports), and turns
+# over 2,000 characters after trimming.
 # These rules look at the typed text only: `<pasted_content>` blocks are left
 # out, so a turn that is only a paste is skipped and a long paste doesn't
 # count towards the limit. The turn file still holds the whole turn; `load`
@@ -45,6 +54,17 @@ case "$MODE" in shadow | live) ;; *) exit 0 ;; esac
 command -v jq >/dev/null || exit 0
 started=$(jq -n 'now * 1000 | floor') || exit 0
 command -v "$SWAMP" >/dev/null || exit 0
+
+if [ "${PUDDLEROUTER_KEY_CHECK:-on}" != off ]; then
+  state="${PUDDLEROUTER_STATE:-$HOME/.local/state/puddlerouter}"
+  stamp="$state/key-check-day"
+  today=$(date +%F)
+  if [ "$(cat "$stamp" 2>/dev/null)" != "$today" ] &&
+    mkdir -p "$state" && printf '%s\n' "$today" > "$stamp"; then
+    "$SWAMP" workflow run @puddleworks/puddlerouter-key-check \
+      --repo-dir "$REPO" </dev/null >/dev/null 2>&1 &
+  fi
+fi
 
 # The trimmed prompt, or nothing if this turn is skipped.
 prompt=$(jq -r --argjson max "$MAX_CHARS" '

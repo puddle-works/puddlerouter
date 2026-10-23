@@ -1,0 +1,61 @@
+id: a621994d-33e8-4822-bea0-1ea5d8764449
+name: "@puddleworks/puddlerouter-key-check"
+description: >-
+  Check that Jev's API key still works, and raise a GitHub issue when it does
+  not. An expired key makes every route step fail, and the router fails open,
+  so without this check routing stops silently. The hook starts this on the
+  first turn of each day; the schedule only fires under swamp serve.
+version: 1
+tags:
+  maxReruns: "3"
+  maxWallClock: "2m"
+trigger:
+  schedule: "0 8 * * *"
+inputs:
+  type: object
+  properties:
+    repo:
+      type: string
+      default: puddle-works/puddlerouter
+      description: The GitHub repo the issue is raised in.
+jobs:
+  - name: main
+    steps:
+      - name: check
+        description: >-
+          List the models the account can use. It needs a valid key, and
+          stores a new version of jev's models data when it succeeds.
+        allowFailure: true
+        task:
+          type: model_method
+          modelIdOrName: jev
+          methodName: models
+      - name: raise
+        description: >-
+          Raise one issue per outage. The key counts the successful checks so
+          far, so it stays the same until the key works again.
+        dependsOn:
+          - step: check
+            condition:
+              type: failed
+        task:
+          type: model_method
+          modelIdOrName: github
+          methodName: create_issue
+          inputs:
+            repo: ${{ inputs.repo }}
+            title: "Jev's API key check failed"
+            idempotencyKey: >-
+              ${{ "jev-key-check-" + string(size(data.listVersions("jev", "models"))) }}
+            body: >-
+              The daily `@puddleworks/puddlerouter-key-check` workflow could
+              not list Jev's models. While this lasts, every route step fails
+              and puddlerouter fails open, so no turn is routed.
+
+
+              See why with `swamp report get @swamp/method-summary --model jev
+              --json`. For HTTP 401 `api_key_expired`, create a new key at
+              https://opencode.ai/auth and store it with `pbpaste | swamp vault
+              put typesafe TYPESAFE_API_KEY`, then run `swamp workflow run
+              @puddleworks/puddlerouter-key-check` to check it. Close this
+              issue once it passes.

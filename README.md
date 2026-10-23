@@ -143,6 +143,21 @@ your logged-in `gh auth` (no token in the vault) and is the only third-party
 extension used: it is not pulled by the allowlist, only by this repo. Shadow
 mode never raises an issue; `wouldAction` records that it would.
 
+## Key check
+
+When Jev's key expires, every route step fails with HTTP 401 and the hook
+fails open, so routing stops without any sign. The first turn of each day
+(skipped turns included) starts `@puddleworks/puddlerouter-key-check` in the
+background. It lists Jev's models, and if that fails it raises one issue
+("Jev's API key check failed") in `puddle-works/puddlerouter`. The issue is
+de-duplicated per outage: its key counts the checks that have passed, so a
+new one is raised only after the key has worked again. The workflow's daily
+`0 8 * * *` schedule only fires under `swamp serve`. To check by hand:
+
+```sh
+swamp workflow run @puddleworks/puddlerouter-key-check
+```
+
 ## Set up
 
 The runtime repo is the clone at `~/dev/puddlerouter`.
@@ -171,7 +186,9 @@ Then add the hook to `~/.claude/settings.json` under `hooks.UserPromptSubmit`:
 Hook settings (environment): `PUDDLEROUTER=off` skips every turn;
 `PUDDLEROUTER_MODE=shadow|live` (default `shadow`); `PUDDLEROUTER_REPO` (default
 `~/dev/puddlerouter`); `PUDDLEROUTER_TIMEOUT` seconds for live mode (default
-15). Start a turn with `llm:` to skip the router for that turn.
+15); `PUDDLEROUTER_KEY_CHECK=off` skips the daily key check, whose day stamp
+is kept in `PUDDLEROUTER_STATE` (default `~/.local/state/puddlerouter`).
+Start a turn with `llm:` to skip the router for that turn.
 
 ## Read the shadow log
 
