@@ -31,6 +31,13 @@ import {
   runRecipe,
   searchQuery,
 } from "./_lib/recipes.ts";
+import {
+  checkMerged,
+  matchMerged,
+  type MergedCheck,
+  MergedCheckSchema,
+  type RunModel,
+} from "./_lib/merged.ts";
 
 /** Jev's answer to a decision: unsure when it is not past the cut-off. */
 export const ANSWERS = ["yes", "no", "unsure"] as const;
@@ -174,6 +181,22 @@ export const SyncArgsSchema = z.object({
 /** The arguments `sync` accepts. */
 export type SyncArgs = z.infer<typeof SyncArgsSchema>;
 
+/** Arguments for `merged`. */
+export const MergedArgsSchema = z.object({
+  text: z.string().describe("The cleaned turn text."),
+});
+/** The arguments `merged` accepts. */
+export type MergedArgs = z.infer<typeof MergedArgsSchema>;
+
+/** What `merged` stores: whether the turn only says "merged", and the check. */
+export const MergedSchema = MergedCheckSchema.extend({
+  /** True when the turn only says a PR merged; nothing else is set if not. */
+  matched: z.boolean(),
+  /** The PR numbers the turn names; empty for a bare "merged". */
+  numbers: z.array(z.number().int()),
+  checkedAt: z.iso.datetime(),
+});
+
 /** Arguments for `recall`. */
 export const RecallArgsSchema = z.object({
   sourceRef: z.string().describe("The turn's sourceRef; the route cache key."),
@@ -223,6 +246,19 @@ export const ReplyArgsSchema = z.object({
   ),
   recalled: RecallSchema.optional().describe(
     "The `recall` step's answers; used where a Jev step was skipped.",
+  ),
+  mergedMatched: z.boolean().optional().describe(
+    "True when the `merged` step found the turn only says a PR merged.",
+  ),
+  mergedOk: z.boolean().optional().describe("True if the merged check ran."),
+  mergedText: z.string().optional().describe(
+    "What the merged check found and the steps to finish.",
+  ),
+  mergedSummary: z.string().optional().describe(
+    "The merged check in one line, e.g. #12 clean.",
+  ),
+  mergedError: z.string().optional().describe(
+    "Why the merged check failed; empty if it ran.",
   ),
 });
 /** The arguments `reply` accepts. */
@@ -868,7 +904,10 @@ export function buildReply(
   now: Date = new Date(),
 ): Reply {
   const choice = args.choice ?? "";
-  const route = effectiveRoute(choice, args.confidence, args.cutoff);
+  const merged = args.mergedMatched === true;
+  const route = merged
+    ? "deterministic"
+    : effectiveRoute(choice, args.confidence, args.cutoff);
   const complete = args.complete ?? false;
   const answerCutoff = args.answerCutoff ?? 0.8;
   const yes = route === "decision" && complete ? args.yes ?? null : null;
@@ -879,7 +918,15 @@ export function buildReply(
   let extension = "";
   let issue = "";
   let reason: string;
-  if (!choice) reason = "no route answer";
+  if (merged) {
+    // Claude still does the clean-up, so the steps go in as context.
+    recipe = "merged";
+    if (args.mergedOk && args.mergedText) {
+      wouldAction = "hint";
+      text = args.mergedText;
+      reason = `merged: ${args.mergedSummary ?? ""}`;
+    } else reason = `merged check failed: ${args.mergedError ?? ""}`;
+  } else if (!choice) reason = "no route answer";
   else if (route !== choice) reason = "confidence below cut-off";
   else if (route === "llm") reason = "llm route";
   else if (route === "deterministic") {
@@ -950,6 +997,8 @@ interface MethodContext {
   ) => Promise<{ name: string }>;
   readResource: (name: string) => Promise<Record<string, unknown> | null>;
   logger: { info: (msg: string, props: Record<string, unknown>) => void };
+  /** Runs another model's method in process; `merged` uses it. */
+  runModel?: RunModel;
 }
 
 /** A store over the method's own swamp resources. */
@@ -1023,8 +1072,52 @@ export const model = {
       lifetime: "7d" as const,
       garbageCollection: 1,
     },
+    merged: {
+      description:
+        "Whether the turn only says a PR merged, and what checking it found.",
+      schema: MergedSchema,
+      lifetime: "14d" as const,
+      garbageCollection: 2000,
+    },
   },
   methods: {
+    merged: {
+      description:
+        "If the turn only says a PR merged, check the PR and its worktree " +
+        "(read-only, via @swamp/git and @webframp/github); store `merged`.",
+      arguments: MergedArgsSchema,
+      execute: async (args: MergedArgs, context: MethodContext) => {
+        const hit = matchMerged(args.text);
+        const empty = {
+          ok: false,
+          repo: "",
+          mainCheckout: "",
+          prs: [],
+          checked: [],
+          summary: "",
+          text: "",
+          error: "",
+        };
+        let check: MergedCheck = { ...empty };
+        if (hit && context.runModel) {
+          context.logger.info("Checking merged PRs {numbers}", {
+            numbers: hit.numbers.join(", "),
+          });
+          check = await checkMerged(hit.numbers, context.runModel);
+        } else if (hit) check.error = "runModel is not available";
+        const handle = await context.writeResource("merged", "merged", {
+          ...check,
+          matched: hit !== null,
+          numbers: hit?.numbers ?? [],
+          checkedAt: new Date().toISOString(),
+        });
+        context.logger.info("Merged {matched}: {summary}", {
+          matched: hit !== null,
+          summary: check.summary || check.error,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
     match: {
       description:
         "Match a turn to a built-in recipe, else search for extensions; store `match`.",
