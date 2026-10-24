@@ -8,6 +8,7 @@
 - [Step 6: local config and a wider allowlist](#step-6-local-config-and-a-wider-allowlist)
 - [Step 6b: caches](#step-6b-caches)
 - [Step 6c: recipe packs, `recipeIndex` and the sync workflow](#step-6c-recipe-packs-recipeindex-and-the-sync-workflow)
+- [Merged turns (issue #24)](#merged-turns-issue-24)
 
 ## Step 0: checks
 
@@ -725,3 +726,64 @@ has run in it once. Re-run it by hand when a pack changes, or run
 `swamp serve` for the daily `0 6 * * *` schedule. Sync pulls the pack's
 extensions, so it dirties the tracked `extensions/models/upstream_extensions.json`
 there; `git checkout` it before a `git pull --ff-only`.
+
+## Merged turns (issue #24)
+
+In the shadow week (13 to 24 October, 341 turns, 325 on the `llm` route), 21
+turns were only "merged" or "N is merged" and 11 more started that way and asked
+for something else too. Jev routes them `llm` (about 0.77), since they read as
+replies to the conversation. What they need from it is the current repo and its
+worktrees, which the session's directory gives.
+
+### Decisions
+
+- **Read-only, as a hint.** The issue asked for a write recipe that removes the
+  worktree and branch and pulls main. Write recipes wait on #13 (how they are
+  gated), and the hook stays in shadow mode until step 5, so this step only
+  checks and lists the steps. The answer is a hint in live mode as well: Claude
+  still runs the steps, with the facts in front of it.
+- **Its own step, before `route`.** The turn shape is fixed, so a regex in
+  `_lib/merged.ts` matches it and Jev is not asked. `route`, `decide` and
+  `match` are skipped for a matched turn, and `reply` records `recipe: merged`
+  and route `deterministic`. A turn that also asks for more ("merged, next")
+  does not match; that is the turn-splitting issue (#25). "Merged, clean up the
+  worktree(s)" does match, since it asks for the same steps.
+- **`context.runModel`, not a subprocess.** The step calls `@swamp/git`
+  (`config`, `worktree_list`, `status`, `is_ancestor`) and `@webframp/github`
+  (`get_pull_request_context`, `list_prs`) in-process. Both are listed in
+  `manifest.yaml` `dependencies`. `@swamp/git` cannot list worktrees, so
+  `git_worktrees.ts` adds `worktree_list` to it with `export const extension`.
+- **A worktree counts only at the PR's exact head.** GitHub's PR data has no
+  head branch name, and a branch name can be reused. A worktree with commits
+  after the head is `ahead` and is never offered for removal.
+- **A head already on `origin/main` skips the ancestry check.** A PR merged with
+  a merge commit has its head on main, so every later branch descends from it.
+  Without this check the first live run called such a PR `ahead` because of an
+  unrelated newer worktree.
+
+### What `runModel` does
+
+| Behaviour            | Seen                                                                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Result               | `{ok: true, resources: [{name, specName, attributes}]}` or `{ok: false, error: {message}}`; it does not throw                              |
+| A missing definition | is created ("Auto-created definition …") and written to `models/@swamp/git/<name>.yaml`, so this repo commits `models/@swamp/git/git.yaml` |
+| `arguments`          | can override a definition's global arguments (`repoPath` for `status`)                                                                     |
+| Working directory    | the Claude session's, since the hook's swamp inherits it; `@swamp/git`'s default `repoPath` "." is that directory                          |
+
+### Live check (2026-10-24, shadow mode)
+
+Run from the runtime repo with the workflow from the feature worktree. The turns
+are test turns, not ones from the shadow log.
+
+| Turn                                                   | Result                                             | Seconds |
+| ------------------------------------------------------ | -------------------------------------------------- | ------- |
+| "22 is merged", a clean worktree at #22's head         | #22 clean; steps: remove, delete branch, pull main | 2       |
+| "merged #22", the same worktree with an untracked file | #22 dirty, no steps                                | 2       |
+| "merged"                                               | checked #22, #21 and #19; #22 clean                | 4       |
+| "21 merged" (merge commit on main)                     | #21 absent                                         | 3       |
+| "18 and 22 merged"                                     | #18 absent, #22 clean                              | 2       |
+| "23 is merged" (there is no PR #23)                    | #23 error, the `gh` message                        | 1       |
+| "merged, next"                                         | not matched; the usual route                       | 1       |
+
+On an unmatched turn the step adds about 1 second: one regex and the swamp step
+itself.

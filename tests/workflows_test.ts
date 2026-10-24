@@ -255,3 +255,72 @@ Deno.test("the key check lists Jev's models daily and raises one issue per outag
   const manifest = await readYaml("manifest.yaml") as { workflows: string[] };
   assert(manifest.workflows.includes(file));
 });
+
+const MERGED = "steps.merged.outputs.matched";
+
+Deno.test("merged runs after load, never for an empty or withheld turn, and never blocks", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  const step = await stepOf(wf, "merged");
+  assertEquals(step.task.modelIdOrName, "puddlerouter");
+  assertEquals(step.task.methodName, "merged");
+  assertEquals(step.allowFailure, true);
+  assert(step.dependsOn?.some((d) => d.step === "load"));
+  const guard = step.guard ?? "";
+  assert(guard.includes("steps.load.outputs.empty"));
+  assert(guard.includes("steps.load.outputs.withheld"));
+  const inputs = step.task.inputs as Record<string, string>;
+  assert(inputs.text.includes("steps.load.outputs.text"));
+});
+
+Deno.test("a merged turn skips Jev and the recipe search", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  for (const name of ["route", "decide", "match"]) {
+    const step = await stepOf(wf, name);
+    assert((step.guard ?? "").includes(MERGED), `${name} guard lacks merged`);
+    assert(
+      step.dependsOn?.some((d) =>
+        d.step === "merged" && d.condition.type === "always"
+      ),
+      `${name} lacks an always dep on merged`,
+    );
+  }
+});
+
+Deno.test("reply waits for merged and gets its result", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "reply");
+  assert(
+    step.dependsOn?.some((d) =>
+      d.step === "merged" && d.condition.type === "always"
+    ),
+  );
+  const inputs = step.task.inputs as Record<string, string>;
+  const fields: Record<string, string> = {
+    mergedMatched: "matched",
+    mergedOk: "ok",
+    mergedText: "text",
+    mergedSummary: "summary",
+    mergedError: "error",
+  };
+  for (const [input, field] of Object.entries(fields)) {
+    assert(
+      inputs[input]?.includes(`steps.merged.outputs.${field}`),
+      `reply ${input} lacks merged.${field}`,
+    );
+  }
+});
+
+Deno.test("the manifest ships the worktree_list extension and its dependencies", async () => {
+  const manifest = await readYaml("manifest.yaml") as {
+    models: string[];
+    dependencies?: string[];
+  };
+  assert(manifest.models.includes("git_worktrees.ts"));
+  for (const dep of ["@swamp/git", "@webframp/github"]) {
+    assert(manifest.dependencies?.includes(dep), `dependencies lack ${dep}`);
+  }
+  const git = await readYaml("models/@swamp/git/git.yaml") as {
+    type: string;
+    name: string;
+  };
+  assertEquals([git.type, git.name], ["@swamp/git", "git"]);
+});

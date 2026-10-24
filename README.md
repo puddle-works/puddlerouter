@@ -14,7 +14,9 @@ workflow, and Jev (TypeSafe's System One model) picks a route:
 4, 6, 6b and 6c).** The hook logs what live mode would do and never blocks: Claude always
 runs. In live mode (`PUDDLEROUTER_MODE=live`) a yes/no question Jev answers
 confidently is blocked and Jev's answer is shown instead, and so is a git
-status, log or branch question a recipe answers. Shadow mode stays the default
+status, log or branch question a recipe answers. A turn that only says a PR
+has merged gets a read-only check and the steps to finish as a hint (see
+[Merged turns](#merged-turns)). Shadow mode stays the default
 until step 5, after a week of shadow data. See
 [`docs/puddlerouter.md`](docs/puddlerouter.md) for the plan and the step 0
 findings.
@@ -34,6 +36,9 @@ prompt ─▶ hooks/puddlerouter.sh
              recall Jev's earlier route, decision and pick for this exact turn
                     (route cache, 7 days); route, decide and pick are skipped
                     for what it holds
+             merged a turn that only says a PR merged ("merged", "12 is
+                    merged"): check its worktree read-only and hint the steps
+                    to finish; route, decide and match are skipped
              route  jev.choice over deterministic / decision / llm (cut-off 0.7)
              decide jev.noul, only for a decision turn with nothing pasted,
                     fenced or cut; yes at ≥ 0.8, no at ≤ 0.2, else unsure
@@ -70,6 +75,10 @@ checked first:
 - Only allowlisted extensions are pulled or run (`@swamp/*`, `@mesgme/*`,
   `@webframp/*`, `@puddleworks/*`, plus whatever `puddlerouter.yaml` adds), and
   only recipes marked read-only.
+
+The `merged` step runs no subprocess of its own: it calls `@swamp/git` and
+`@webframp/github` through `context.runModel`, with only PR numbers and the
+origin repo's `owner/name` as arguments.
 
 ## Local config
 
@@ -119,6 +128,46 @@ and listed in the index's `errors`. puddlerouter runs the method itself with
 `--literal-inputs`, not the workflow, so the workflow is also a way to run the
 same call by hand. See `puddle-works/puddlerouter-recipes-github`.
 
+## Merged turns
+
+A turn that is only "merged", "N is merged", "merged #N", "N and M merged" (up
+to five numbers), optionally followed by "clean up the worktree(s)", is answered
+by the `merged` step without Jev. It reads, and changes nothing:
+
+1. `remote.origin.url` in the session's directory, for the GitHub repo.
+2. The repo's worktrees (`worktree_list`, which this extension adds to
+   `@swamp/git`).
+3. Each PR (`@webframp/github` `get_pull_request_context`). A bare "merged"
+   checks the three most recently updated merged PRs and reports the ones a
+   worktree is at.
+4. For a merged PR whose head SHA is checked out in a worktree: that worktree's
+   `git status`.
+
+Each PR gets one verdict:
+
+| Verdict          | Meaning                                                                    |
+| ---------------- | -------------------------------------------------------------------------- |
+| `clean`          | A worktree is at the PR's head with no uncommitted changes: safe to remove |
+| `dirty`          | A worktree is at the head but has uncommitted or untracked files           |
+| `locked`         | The worktree is locked (`git worktree lock`)                               |
+| `primary`        | The main checkout is at the head; it is switched to main, not removed      |
+| `ahead`          | A worktree has commits after the PR's head: removing it would orphan them  |
+| `absent`         | No worktree is at the head; it may be cleaned up already                   |
+| `open`, `closed` | The PR is not merged                                                       |
+| `error`          | The PR could not be looked up                                              |
+
+Only `clean` and `primary` give steps ("Remove the worktree …", "Switch … to
+main and pull", "Delete the branch …, locally and on origin", "Pull main in …").
+The answer goes to Claude as a hint (`additionalContext`), so Claude does the
+steps; the hook never blocks these turns, in shadow or live mode. A PR's title
+is shown only once it is merged, cut to 60 characters. The check takes 1 to 4
+seconds.
+
+Known gaps: ignored files in a worktree are not seen, `origin/main` is as fresh
+as the last fetch, and the steps suggest deleting the remote branch even if
+GitHub already did.
+
+
 ## Caches
 
 A repeated turn makes no Jev call and no search subprocess:
@@ -140,7 +189,8 @@ in `puddle-works/puddleworks-apps`, and the hook shows its link instead of
 running Claude. `@webframp/github`'s `create_issue` de-duplicates on the turn's
 `sourceRef`, so sending the same turn again reuses the issue. It runs `gh` with
 your logged-in `gh auth` (no token in the vault) and is the only third-party
-extension used: it is not pulled by the allowlist, only by this repo. Shadow
+extension used (also by the `merged` step, read-only): it is not pulled by the
+allowlist, only by this repo. Shadow
 mode never raises an issue; `wouldAction` records that it would.
 
 ## Key check

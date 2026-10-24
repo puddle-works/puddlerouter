@@ -8,7 +8,11 @@ additionalFiles:
   - LICENSE
 models:
   - puddlerouter.ts
+  - git_worktrees.ts
 workflows:
   - workflow-puddlerouter.yaml
   - workflow-puddlerouter-recipes-sync.yaml
   - workflow-puddlerouter-key-check.yaml
+dependencies:
+  - "@swamp/git"
+  - "@webframp/github"
