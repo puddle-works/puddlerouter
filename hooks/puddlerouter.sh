@@ -6,9 +6,9 @@
 # starting with `@` as a file, and records every input in its run history.
 #
 # Both modes wait for the workflow and read its `reply`.
-# shadow (default): Claude always runs and gets no added context. When live
-#   mode would block or hint, a systemMessage tells the user what it would do.
-# live: acts on the reply:
+# shadow: Claude always runs and gets no added context. When live mode would
+#   block or hint, a systemMessage tells the user what it would do.
+# live (default since step 5): acts on the reply:
 #   block -> {"decision":"block","reason":text}   (Claude does not run)
 #   hint  -> additionalContext text, and a systemMessage showing the user
 #            what was added                       (Claude runs with it)
@@ -19,7 +19,7 @@
 #
 # Settings (environment):
 #   PUDDLEROUTER=off         skip every turn
-#   PUDDLEROUTER_MODE        shadow (default) or live
+#   PUDDLEROUTER_MODE        live (default) or shadow
 #   PUDDLEROUTER_REPO        swamp repo to run in (default ~/dev/puddlerouter)
 #   PUDDLEROUTER_TIMEOUT     seconds to wait for swamp (default 15)
 #   PUDDLEROUTER_SWAMP       swamp binary (default swamp; tests use a fake)
@@ -46,7 +46,7 @@ exec 2>/dev/null
 
 [ "${PUDDLEROUTER:-on}" = "off" ] && exit 0
 
-MODE="${PUDDLEROUTER_MODE:-shadow}"
+MODE="${PUDDLEROUTER_MODE:-live}"
 REPO="${PUDDLEROUTER_REPO:-$HOME/dev/puddlerouter}"
 LIMIT="${PUDDLEROUTER_TIMEOUT:-15}"
 SWAMP="${PUDDLEROUTER_SWAMP:-swamp}"

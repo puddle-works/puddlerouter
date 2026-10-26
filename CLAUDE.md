@@ -73,8 +73,9 @@ typed turn to swamp, Jev or Claude. The plan and step 0 findings are in
   names must use the extension's collective (the publish quality gate checks
   this), and `@puddleworks` because `@mesgme` is on swamp's Free plan, which
   cannot publish privately.
-- **The hook stays in shadow mode** (logs only, never blocks) until step 5,
-  which needs a week of shadow data and the owner's go-ahead.
+- **The hook runs in live mode** (the default since step 5, which the owner
+  approved on 2026-10-26): it can block a turn or add a hint, and always
+  shows the user what it did. `PUDDLEROUTER_MODE=shadow` still logs only.
 - Never put turn text in a swamp `--input`: the hook passes a temp file's path
   only. `@...` input values are read as files, and inputs are recorded in run
   history.
