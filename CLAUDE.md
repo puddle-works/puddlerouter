@@ -51,10 +51,10 @@ Behaviors (formerly models) are managed with `swamp behavior` — e.g.
 directly). Every `swamp model …` spelling remains supported.
 <!-- END swamp managed section -->
 
-## Puddle repo
+## puddlerouter repo
 
-This repo is a puddle made from `puddle-works/puddle-template` ([ADR-004][adr]).
-It holds one puddle, `@puddleworks/puddlerouter`: a Claude Code hook that sends each
+This repo is made from `puddle-works/puddle-template` ([ADR-004][adr]).
+It holds one extension, `@puddleworks/puddlerouter`: a Claude Code hook that sends each
 typed turn to swamp, Jev or Claude. The plan and step 0 findings are in
 `docs/puddlerouter.md`.
 

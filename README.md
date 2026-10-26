@@ -195,9 +195,10 @@ Known gaps: ignored files in a worktree are not seen, `origin/main` is as fresh
 as the last fetch, and the steps suggest deleting the remote branch even if
 GitHub already did.
 
-Planned (#24): for `absent` and `clean` PRs, puddlerouter will show the plan,
-ask for a yes, and then do the steps itself. The gate is decided in
-`docs/puddlerouter.md` ("Write recipes: the gate").
+puddlerouter will not do these steps itself. The cleanup becomes its own
+request in Capture and its own extension, and a write recipe will call it
+(puddle-works/puddlerecipes#3). See `docs/puddlerouter.md` ("Where write
+recipes go").
 
 
 ## Caches

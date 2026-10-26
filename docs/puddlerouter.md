@@ -10,6 +10,10 @@
 - [Step 6c: recipe packs, `recipeIndex` and the sync workflow](#step-6c-recipe-packs-recipeindex-and-the-sync-workflow)
 - [Merged turns (issue #24)](#merged-turns-issue-24)
 - [Showing the user what was added](#showing-the-user-what-was-added)
+- [Step 5: live mode](#step-5-live-mode)
+- [A note on every turn](#a-note-on-every-turn)
+- [Write recipes: the gate (issue #27)](#write-recipes-the-gate-issue-27)
+- [Where write recipes go](#where-write-recipes-go)
 
 ## Step 0: checks
 
@@ -929,3 +933,32 @@ only would hardly ever run.
    #13) is not decided yet. #13 stays open for it.
 
 The recipe itself is built in #24.
+
+These decisions still stand, but they no longer live here. See the next
+section.
+
+## Where write recipes go
+
+On 2026-10-26 the owner decided that puddlerouter only routes turns. It does
+not make changes itself. Building the merged cleanup inside the router (#24)
+was the wrong step. #24 and #13 are closed.
+
+### Decisions
+
+1. **A change is its own extension.** Something puddlerouter should do, such as
+   the merged cleanup, pulling checkouts or starting a worktree, is raised as a
+   request in Capture (for work with no repo yet, or raised through
+   puddlerouter) or as an issue in the repo it belongs to. It is built as its own
+   swamp extension. A recipe in front of it lets puddlerouter call it.
+2. **The gate above is general.** Asking once, the 10-minute expiry, the same
+   session and shadow mode running nothing now apply to any write recipe, in
+   `@puddleworks/recipes` (puddle-works/puddlerecipes#3). Checking each step
+   again before it runs is the extension's job, not the engine's.
+3. **Read or write comes from what was agreed.** A recipe does not mark itself
+   read-only. The engine takes `effects` from the outcome specification agreed
+   in Capture (puddle-works/puddleworks-capture#24). An extension with no
+   `effects` counts as `write`.
+4. **The `merged` step moves out.** `_lib/merged.ts` (the verdicts) and the
+   `worktree_list` extension in `git_worktrees.ts` are cleanup logic. They stay,
+   and keep giving today's hint, until the cleanup extension exists. Then the
+   step becomes a recipe that calls it, and both files are removed.
