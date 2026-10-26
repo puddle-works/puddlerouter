@@ -23,13 +23,22 @@ jobs:
     steps:
       - name: check
         description: >-
-          List the models the account can use. It needs a valid key, and
-          stores a new version of jev's models data when it succeeds.
+          Ask Jev the kind of question a route step asks. It needs a valid key
+          and an account that may use the model, and stores a new version of
+          jev's choice-key-check data when it succeeds. Listing models is not
+          used: OpenCode Zen answers in a shape @swamp/typesafe-ai rejects.
         allowFailure: true
         task:
           type: model_method
           modelIdOrName: jev
-          methodName: models
+          methodName: choice
+          inputs:
+            name: key-check
+            state: list the open pull requests
+            instructions: Pick the kind of request this is.
+            criteria:
+              lookup: It asks to list or look something up.
+              change: It asks to change something.
       - name: raise
         description: >-
           Raise one issue per outage. The key counts the successful checks so
@@ -46,10 +55,10 @@ jobs:
             repo: ${{ inputs.repo }}
             title: "Jev's API key check failed"
             idempotencyKey: >-
-              ${{ "jev-key-check-" + string(size(data.listVersions("jev", "models"))) }}
+              ${{ "jev-key-check-" + string(size(data.listVersions("jev", "choice-key-check"))) }}
             body: >-
               The daily `@puddleworks/puddlerouter-key-check` workflow could
-              not list Jev's models. While this lasts, every route step fails
+              not get an answer from Jev. While this lasts, every route step fails
               and puddlerouter fails open, so no turn is routed.
 
 
@@ -57,5 +66,7 @@ jobs:
               --json`. For HTTP 401 `api_key_expired`, create a new key at
               https://opencode.ai/auth and store it with `pbpaste | swamp vault
               put typesafe TYPESAFE_API_KEY`, then run `swamp workflow run
-              @puddleworks/puddlerouter-key-check` to check it. Close this
-              issue once it passes.
+              @puddleworks/puddlerouter-key-check` to check it. HTTP 429
+              `FreeUsageLimitError` means the account has used its allowance;
+              add usage at https://opencode.ai/go. Close this issue once the
+              check passes.

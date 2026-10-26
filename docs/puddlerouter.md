@@ -825,3 +825,14 @@ already been made in practice. Since then almost every turn has passed with
 Only turns that need no Jev call (the `merged` step, cached routes) are still
 routed.
 
+On 26 October a new key cleared the 401, but the route call then got HTTP 429
+`FreeUsageLimitError`: the free tier's allowance was used up. The owner moved
+Jev to the paid `jev-1.13` model, and routing works again (a test turn routed
+`llm` at 0.98).
+
+The key check had never passed. It listed Jev's models, but OpenCode Zen
+answers `GET /v1/models` in the OpenAI shape (`{object: "list", data: [...]}`)
+and `@swamp/typesafe-ai` expects `{models: [...]}`, so the check failed even
+with a working key. It now makes a small `choice` call, the same call a route
+step makes, so it fails exactly when routing would.
+

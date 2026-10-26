@@ -225,11 +225,14 @@ Deno.test("the recipes sync workflow runs the sync method on a daily schedule an
   assert(manifest.workflows.includes(file));
 });
 
-Deno.test("the key check lists Jev's models daily and raises one issue per outage", async () => {
+Deno.test("the key check asks Jev a small question daily and raises one issue per outage", async () => {
   const file = "workflow-puddlerouter-key-check.yaml";
   const check = await stepOf(file, "check");
   assertEquals(check.task.modelIdOrName, "jev");
-  assertEquals(check.task.methodName, "models");
+  // Not models: OpenCode Zen lists models in a shape @swamp/typesafe-ai
+  // rejects, so that check never passed. choice is the call routing makes.
+  assertEquals(check.task.methodName, "choice");
+  assertEquals((check.task.inputs as Record<string, string>).name, "key-check");
   assertEquals(check.allowFailure, true);
   const raise = await stepOf(file, "raise");
   assertEquals(raise.task.modelIdOrName, "github");
@@ -241,9 +244,14 @@ Deno.test("the key check lists Jev's models daily and raises one issue per outag
   );
   const inputs = raise.task.inputs as Record<string, string>;
   assert(inputs.repo.includes("inputs.repo"));
-  // A successful check stores a new version of jev's models data, so the key
-  // changes after each recovery and stays the same during an outage.
-  assert(inputs.idempotencyKey.includes('data.listVersions("jev", "models")'));
+  // A successful check stores a new version of jev's choice-key-check data,
+  // so the key changes after each recovery and stays the same during an
+  // outage.
+  assert(
+    inputs.idempotencyKey.includes(
+      'data.listVersions("jev", "choice-key-check")',
+    ),
+  );
   const wf = await readYaml(`workflows/${file}`) as {
     name: string;
     trigger: { schedule: string };
@@ -254,6 +262,13 @@ Deno.test("the key check lists Jev's models daily and raises one issue per outag
   assertEquals(wf.inputs.properties.repo.default, "puddle-works/puddlerouter");
   const manifest = await readYaml("manifest.yaml") as { workflows: string[] };
   assert(manifest.workflows.includes(file));
+});
+
+Deno.test("jev uses the paid jev-1.13 model, not the free tier", async () => {
+  const jev = await readYaml("models/@swamp/typesafe-ai/jev.yaml") as {
+    globalArguments: { model: string };
+  };
+  assertEquals(jev.globalArguments.model, "jev-1.13");
 });
 
 const MERGED = "steps.merged.outputs.matched";
