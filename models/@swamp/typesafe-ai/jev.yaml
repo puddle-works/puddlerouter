@@ -7,5 +7,5 @@ tags: {}
 globalArguments:
   apiKey: '${{ vault.get("typesafe", "TYPESAFE_API_KEY") }}'
   baseUrl: 'https://opencode.ai/zen'
-  model: jev-1.13-free
+  model: jev-1.13
 methods: {}

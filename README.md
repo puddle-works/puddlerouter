@@ -216,7 +216,8 @@ mode never raises an issue; `wouldAction` records that it would.
 When Jev's key expires, every route step fails with HTTP 401 and the hook
 fails open, so routing stops without any sign. The first turn of each day
 (skipped turns included) starts `@puddleworks/puddlerouter-key-check` in the
-background. It lists Jev's models, and if that fails it raises one issue
+background. It asks Jev a small routing question (the same `choice` call a
+route step makes), and if that fails it raises one issue
 ("Jev's API key check failed") in `puddle-works/puddlerouter`. The issue is
 de-duplicated per outage: its key counts the checks that have passed, so a
 new one is raised only after the key has worked again. The workflow's daily

@@ -1,7 +1,7 @@
 {
   "extension": "@puddleworks/puddlerouter",
   "version": "2026.10.13.2",
-  "reviewedAt": "2026-10-26T09:40:00Z",
+  "reviewedAt": "2026-10-26T10:00:00Z",
   "dimensions": [
     {
       "id": "credentials-secrets",
@@ -31,7 +31,7 @@
     {
       "id": "api-contracts",
       "verdict": "pass",
-      "note": "No API of its own; Jev is called by the @swamp/typesafe-ai step in the workflow. The merged step depends on @swamp/git (config returns value, status returns clean and entries, is_ancestor returns isAncestor) and @webframp/github (get_pull_request_context returns context with state, title, url and headRefOid; list_prs returns pullRequests with number and updatedAt). Each result is parsed defensively and a missing field fails that PR soft. Both are listed in manifest dependencies."
+      "note": "No API of its own; Jev is called by the @swamp/typesafe-ai step in the workflow. The merged step depends on @swamp/git (config returns value, status returns clean and entries, is_ancestor returns isAncestor) and @webframp/github (get_pull_request_context returns context with state, title, url and headRefOid; list_prs returns pullRequests with number and updatedAt). Each result is parsed defensively and a missing field fails that PR soft. Both are listed in manifest dependencies. 2026-10-26: the key-check workflow now calls jev choice (name key-check) instead of jev models, because OpenCode Zen returns GET /v1/models as {object, data} and @swamp/typesafe-ai expects {models}; checked against Zen, the choice call answered lookup with jev-1.13."
     },
     {
       "id": "resource-management",
