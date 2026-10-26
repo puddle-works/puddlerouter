@@ -1392,3 +1392,115 @@ Deno.test("the model has a recipeIndex resource and a sync method", () => {
   assertEquals(model.resources.recipeIndex.lifetime, "7d");
   assert("sync" in model.methods);
 });
+
+const MERGED_TEXT =
+  "puddlerouter checked this with swamp before you ran (read-only: " +
+  "nothing was changed):\n- #12 is merged.\n\nSteps to finish:\n1. Pull main in /repo.";
+
+Deno.test("buildReply hints with the merged check's steps", () => {
+  const r = buildReply({
+    mode: "live",
+    sourceRef: "puddlerouter:0123456789abcdef",
+    cutoff: 0.7,
+    mergedMatched: true,
+    mergedOk: true,
+    mergedText: MERGED_TEXT,
+    mergedSummary: "#12 clean",
+  });
+  assertEquals(r.action, "hint");
+  assertEquals(r.text, MERGED_TEXT);
+  assertEquals(r.route, "deterministic");
+  assertEquals(r.recipe, "merged");
+  assertEquals(r.reason, "merged: #12 clean");
+});
+
+Deno.test("buildReply in shadow mode records the merged hint and passes", () => {
+  const r = buildReply({
+    mode: "shadow",
+    sourceRef: "puddlerouter:0123456789abcdef",
+    cutoff: 0.7,
+    mergedMatched: true,
+    mergedOk: true,
+    mergedText: MERGED_TEXT,
+    mergedSummary: "#12 clean",
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.text, "");
+  assertEquals(r.wouldAction, "hint");
+  assertEquals(r.reason, "shadow: merged: #12 clean");
+});
+
+Deno.test("buildReply passes when the merged check failed", () => {
+  const r = buildReply({
+    mode: "live",
+    sourceRef: "puddlerouter:0123456789abcdef",
+    cutoff: 0.7,
+    mergedMatched: true,
+    mergedOk: false,
+    mergedError: "origin is not a GitHub remote",
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.route, "deterministic");
+  assertEquals(r.recipe, "merged");
+  assertEquals(r.reason, "merged check failed: origin is not a GitHub remote");
+});
+
+Deno.test("buildReply ignores a merged check that did not match", () => {
+  const r = buildReply({
+    ...detArgs,
+    mergedMatched: false,
+    mergedOk: true,
+    mergedText: MERGED_TEXT,
+  });
+  assertEquals(r.recipe, "");
+  assertEquals(r.reason, "no extension found, no issue raised");
+});
+
+Deno.test("merged writes matched false and calls nothing for other turns", async () => {
+  const written: Written[] = [];
+  const calls: unknown[] = [];
+  await model.methods.merged.execute({ text: "merged, next" }, {
+    ...fakeContext(written),
+    runModel: (call: unknown) => {
+      calls.push(call);
+      return Promise.resolve({ ok: false as const, error: { message: "no" } });
+    },
+  });
+  assertEquals(calls, []);
+  assertEquals(written.map((w) => [w.spec, w.name]), [["merged", "merged"]]);
+  assertEquals(written[0].data.matched, false);
+  assertEquals(written[0].data.ok, false);
+  assertEquals(written[0].data.text, "");
+});
+
+Deno.test("merged runs the check through runModel and stores it", async () => {
+  const written: Written[] = [];
+  const methods: string[] = [];
+  await model.methods.merged.execute({ text: "12 is merged" }, {
+    ...fakeContext(written),
+    runModel: (call: { method: string }) => {
+      methods.push(call.method);
+      return Promise.resolve({
+        ok: false as const,
+        error: { message: "fatal: not a git repository" },
+      });
+    },
+  });
+  assertEquals(methods, ["config"]);
+  const data = written[0].data;
+  assertEquals(data.matched, true);
+  assertEquals(data.numbers, [12]);
+  assertEquals(data.ok, false);
+  assertMatch(data.error as string, /not a git repository/);
+});
+
+Deno.test("merged without runModel stores a failed check", async () => {
+  const written: Written[] = [];
+  await model.methods.merged.execute(
+    { text: "merged" },
+    fakeContext(written),
+  );
+  assertEquals(written[0].data.matched, true);
+  assertEquals(written[0].data.ok, false);
+  assertMatch(written[0].data.error as string, /runModel/);
+});

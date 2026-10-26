@@ -8,7 +8,9 @@ description: >-
   search found, and reply stores what the hook should do. In live mode a
   confident answer blocks the turn with Jev's or the recipe's answer, and a
   deterministic turn nothing can answer raises one GitHub issue (live mode
-  only; one per distinct turn). In shadow mode the reply always passes, so the run
+  only; one per distinct turn). A turn that only says a PR merged skips Jev:
+  the merged step checks the PR and its worktree read-only and the reply adds
+  the steps to finish as context. In shadow mode the reply always passes, so the run
   is a log of what live mode would do. The route question must stay the same
   as in puddlerouter-route-eval, and the decision question as in
   puddlerouter-decision-eval.
@@ -52,7 +54,7 @@ inputs:
   required: [turnFile]
 jobs:
   - name: main
-    description: load, recall, route, decide, match, pick, execute, raise, reply.
+    description: load, recall, merged, route, decide, match, pick, execute, raise, reply.
     dependsOn: []
     weight: 0
     steps:
@@ -83,8 +85,27 @@ jobs:
           methodName: recall
           inputs:
             sourceRef: ${{ steps.load.outputs.sourceRef }}
+      - name: merged
+        description: >-
+          If the turn only says a PR merged ("merged", "12 is merged"), check
+          the PR and the worktree it was built in, read-only, and store the
+          steps to finish. Jev and the recipe search are then skipped. Skipped
+          for an empty or withheld turn; a failure only loses the hint.
+        dependsOn:
+          - step: load
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: true
+        guard: ${{ steps.load.outputs.empty || steps.load.outputs.withheld }}
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: merged
+          inputs:
+            text: ${{ steps.load.outputs.text }}
       - name: route
-        description: Ask Jev which route the turn should take. Skipped for an empty turn, for a turn that looks like it holds a secret (never sent to Jev), and when the route cache already holds the answer.
+        description: Ask Jev which route the turn should take. Skipped for an empty turn, for a turn that looks like it holds a secret (never sent to Jev), when the route cache already holds the answer, and for a merged turn.
         dependsOn:
           - step: load
             condition:
@@ -92,9 +113,12 @@ jobs:
           - step: recall
             condition:
               type: succeeded
+          - step: merged
+            condition:
+              type: always
         weight: 0
         allowFailure: true
-        guard: ${{ steps.load.outputs.empty || steps.load.outputs.withheld || steps.recall.outputs.hasRoute }}
+        guard: ${{ steps.load.outputs.empty || steps.load.outputs.withheld || steps.recall.outputs.hasRoute || (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) }}
         task:
           type: model_method
           modelIdOrName: jev
@@ -123,7 +147,8 @@ jobs:
           Ask Jev the yes/no question in the turn. Skipped unless the route is
           a decision at or above the cut-off (fresh or cached) and the turn is
           complete (nothing pasted, fenced or cut, so the text to judge is all
-          there), and when the route cache already holds the answer.
+          there), when the route cache already holds the answer, and for a
+          merged turn.
         dependsOn:
           - step: route
             condition:
@@ -131,10 +156,14 @@ jobs:
           - step: recall
             condition:
               type: succeeded
+          - step: merged
+            condition:
+              type: always
         weight: 0
         allowFailure: true
         guard: >-
           ${{ steps.recall.outputs.hasDecision ||
+          (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) ||
           !(steps.load.outputs.complete &&
           ((steps.recall.outputs.hasRoute &&
           steps.recall.outputs.choice == "decision" &&
@@ -158,7 +187,7 @@ jobs:
         description: >-
           Match a deterministic turn to a built-in recipe, else search for
           extensions. Skipped unless the route is deterministic at or above
-          the cut-off.
+          the cut-off, and for a merged turn.
         dependsOn:
           - step: route
             condition:
@@ -166,10 +195,14 @@ jobs:
           - step: recall
             condition:
               type: succeeded
+          - step: merged
+            condition:
+              type: always
         weight: 0
         allowFailure: true
         guard: >-
-          ${{ !((steps.recall.outputs.hasRoute &&
+          ${{ (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) ||
+          !((steps.recall.outputs.hasRoute &&
           steps.recall.outputs.choice == "deterministic" &&
           steps.recall.outputs.confidence >= inputs.cutoff) ||
           (has(steps.route) && has(steps.route.outputs) &&
@@ -276,6 +309,9 @@ jobs:
           - step: recall
             condition:
               type: succeeded
+          - step: merged
+            condition:
+              type: always
           - step: route
             condition:
               type: always
@@ -316,3 +352,8 @@ jobs:
             pickChoice: '${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.choice : "" }}'
             pickConfidence: "${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.confidence : 0.0 }}"
             issueUrl: '${{ has(steps.raise) && has(steps.raise.outputs) ? steps.raise.outputs.result : "" }}'
+            mergedMatched: "${{ has(steps.merged) && has(steps.merged.outputs) ? steps.merged.outputs.matched : false }}"
+            mergedOk: "${{ has(steps.merged) && has(steps.merged.outputs) ? steps.merged.outputs.ok : false }}"
+            mergedText: '${{ has(steps.merged) && has(steps.merged.outputs) ? steps.merged.outputs.text : "" }}'
+            mergedSummary: '${{ has(steps.merged) && has(steps.merged.outputs) ? steps.merged.outputs.summary : "" }}'
+            mergedError: '${{ has(steps.merged) && has(steps.merged.outputs) ? steps.merged.outputs.error : "" }}'
