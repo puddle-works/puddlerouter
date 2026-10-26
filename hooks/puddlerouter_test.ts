@@ -5,7 +5,8 @@
  * swamp records its arguments and the turn file's text, then answers as told
  * by FAKE_SWAMP_REPLY (a reply action), FAKE_SWAMP_WOULD and
  * FAKE_SWAMP_WOULD_TEXT (what live mode would do, for shadow mode),
- * FAKE_SWAMP_REASON, FAKE_SWAMP_FAIL or FAKE_SWAMP_HANG.
+ * FAKE_SWAMP_REASON, FAKE_SWAMP_CONFIDENCE, FAKE_SWAMP_FAIL or
+ * FAKE_SWAMP_HANG.
  *
  * Run with: make test
  */
@@ -28,8 +29,9 @@ case "$1 $2" in
       --arg w "\${FAKE_SWAMP_WOULD:-$FAKE_SWAMP_REPLY}" \\
       --arg wt "\${FAKE_SWAMP_WOULD_TEXT-$FAKE_SWAMP_TEXT}" \\
       --arg r "\${FAKE_SWAMP_REASON:-}" \\
+      --argjson c "\${FAKE_SWAMP_CONFIDENCE:-null}" \\
       '{reply: {action: $a, text: $t, wouldAction: $w, wouldText: $wt,
-                reason: $r}}' ;;
+                reason: $r, confidence: $c}}' ;;
 esac
 `;
 
@@ -125,6 +127,22 @@ async function runHook(
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
+}
+
+/** What live mode asks Claude to do with its note. */
+const RELAY =
+  "puddlerouter: the user's view does not show hook messages, so start your reply with this note exactly as written, then answer as normal:";
+
+/** The note live mode shows the user, from its JSON output. */
+function liveNote(run: HookRun): { note: string; context: string } {
+  assertEquals(run.code, 0);
+  const out = JSON.parse(run.stdout);
+  assertEquals(out.hookSpecificOutput.hookEventName, "UserPromptSubmit");
+  const context: string = out.hookSpecificOutput.additionalContext;
+  const quoted = (out.systemMessage as string).split("\n")
+    .map((l) => l === "" ? ">" : `> ${l}`).join("\n");
+  assertEquals(context, `${RELAY}\n\n${quoted}`);
+  return { note: out.systemMessage, context };
 }
 
 function assertSilentPass(run: HookRun) {
@@ -326,49 +344,100 @@ Deno.test("live mode turns a block reply into a block decision", async () => {
   );
 });
 
-Deno.test("live mode turns a hint reply into additionalContext", async () => {
-  const run = await runHook("list the open PRs", {
+// Live mode asks Claude to start its reply with a note of what the router
+// did, because the user's view may not show hook messages (focus mode).
+Deno.test("live mode adds a hint and has Claude show it to the user", async () => {
+  const run = await runHook("merged", {
     PUDDLEROUTER_MODE: "live",
     FAKE_SWAMP_REPLY: "hint",
-    FAKE_SWAMP_TEXT: "Use @webframp/github list_prs.",
+    FAKE_SWAMP_TEXT: "No worktree is at the head of #30.\n\nNothing to do.",
+    FAKE_SWAMP_REASON: "merged: no worktree at a merged head",
   });
-  assertEquals(run.code, 0);
-  assertEquals(JSON.parse(run.stdout), {
-    hookSpecificOutput: {
-      hookEventName: "UserPromptSubmit",
-      additionalContext: "Use @webframp/github list_prs.",
-    },
-    systemMessage:
-      "puddlerouter added this to Claude's context:\n\nUse @webframp/github list_prs.",
-  });
+  const { note } = liveNote(run);
+  assertMatch(
+    note,
+    /^puddlerouter added this to Claude's context \(merged: no worktree at a merged head, \d+\.\d s\):\n\nNo worktree is at the head of #30\.\n\nNothing to do\.$/,
+  );
 });
 
-Deno.test("live mode prints nothing for a pass reply", async () => {
+Deno.test("live mode notes a pass reply with its reason and confidence", async () => {
   const run = await runHook("refactor the reply method", {
     PUDDLEROUTER_MODE: "live",
     FAKE_SWAMP_REPLY: "pass",
+    FAKE_SWAMP_REASON: "llm route",
+    FAKE_SWAMP_CONFIDENCE: "0.98",
   });
-  assertSilentPass(run);
+  assertMatch(
+    liveNote(run).note,
+    /^puddlerouter: sent to Claude \(llm route at 0\.98, \d+\.\d s\)$/,
+  );
 });
 
-Deno.test("live mode fails open when swamp fails", async () => {
+Deno.test("live mode notes a pass reply without a confidence", async () => {
+  const run = await runHook("refactor the reply method", {
+    PUDDLEROUTER_MODE: "live",
+    FAKE_SWAMP_REPLY: "pass",
+    FAKE_SWAMP_REASON: "no route answer",
+  });
+  assertMatch(
+    liveNote(run).note,
+    /^puddlerouter: sent to Claude \(no route answer, \d+\.\d s\)$/,
+  );
+});
+
+Deno.test("live mode fails open with a note when swamp fails", async () => {
   const run = await runHook("is this ok?", {
     PUDDLEROUTER_MODE: "live",
     FAKE_SWAMP_FAIL: "1",
   });
-  assertSilentPass(run);
+  assertEquals(
+    liveNote(run).note,
+    "puddlerouter: the workflow failed, so this went to Claude as normal",
+  );
   assertEquals(run.stderr, "");
 });
 
-Deno.test("live mode fails open when swamp hangs past the timeout", async () => {
+Deno.test("live mode fails open with a note when swamp hangs past the timeout", async () => {
   const run = await runHook("is this ok?", {
     PUDDLEROUTER_MODE: "live",
     PUDDLEROUTER_TIMEOUT: "1",
     FAKE_SWAMP_HANG: "1",
   });
-  assertSilentPass(run);
+  assertEquals(
+    liveNote(run).note,
+    "puddlerouter: no answer within 1 s, so this went to Claude as normal",
+  );
   assert(run.ms < 4000, `took ${run.ms} ms`);
 });
+
+for (
+  const [what, prompt, why] of [
+    ["a slash command", "/review", "a /command"],
+    ["an llm: prefix", "llm: list the open PRs", "an llm: prefix"],
+    ["a prompt that is only pasted text", pasted("## Continue"), "only a paste"],
+    ["a prompt over 2,000 characters", "a".repeat(2001), "over 2,000 characters"],
+  ]
+) {
+  Deno.test(`live mode notes that it skipped ${what}`, async () => {
+    const run = await runHook(prompt, { PUDDLEROUTER_MODE: "live" });
+    assertEquals(liveNote(run).note, `puddlerouter: not routed (${why})`);
+    assertEquals(run.calls, []);
+  });
+}
+
+for (
+  const [what, prompt] of [
+    ["a tagged message from the harness", "<task-notification>done"],
+    ["a bash-mode prompt", "! ls"],
+    ["an empty prompt", "   \n "],
+  ]
+) {
+  Deno.test(`live mode says nothing for ${what}`, async () => {
+    const run = await runHook(prompt, { PUDDLEROUTER_MODE: "live" });
+    assertSilentPass(run);
+    assertEquals(run.calls, []);
+  });
+}
 
 Deno.test("fails open on input that is not JSON", async () => {
   const run = await runHook(null, {}, { stdin: "not json" });

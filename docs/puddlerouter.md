@@ -857,3 +857,29 @@ From 13 to 26 October the log has 355 replies. The figures that decided it:
 keep it as it is. No turn has reached the cut-off, so it has never blocked a
 turn. It costs nothing extra, because it is one of the three choices in the
 same route call.
+
+## A note on every turn
+
+The `systemMessage` added in [Showing the user what was added](#showing-the-user-what-was-added)
+never reached the owner: Claude Code's focus mode shows only Claude's final
+reply, not hook messages. The hook's output was right (checked by hand on a
+`merged` turn); the owner just could not see it.
+
+### Decisions
+
+- **Claude repeats the note.** In live mode the hook's `additionalContext`
+  asks Claude to start its reply with a quoted note of what the router did.
+  The note is also the `systemMessage`, for views that show it. This is the
+  only channel the user sees in focus mode. A hint's text sits inside the
+  note, so Claude reads it once.
+- **Every typed turn, by the owner's choice:** a pass (reason, Jev's
+  confidence, seconds), a hint (reason, seconds and the text), a skip (`/`
+  command, `llm:` prefix, only a paste, over 2,000 characters) and a fail-open
+  (timed out, or the workflow failed). Empty turns, `!` shell turns and
+  messages from the harness (a leading `<`) get none, since nobody typed them.
+- **Shadow mode is unchanged.** It never adds context, so it still uses only
+  `systemMessage`.
+
+Checked against the runtime repo on 2026-10-26: an `llm` turn noted "sent to
+Claude (llm route at 0.98, 3.8 s)", a `merged` turn carried its hint (5.8 s),
+and an `llm:` turn noted "not routed (an llm: prefix)" without calling swamp.

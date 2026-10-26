@@ -50,23 +50,34 @@ prompt ─▶ hooks/puddlerouter.sh
              reply  {action: block|hint|pass, text} → reply
 ```
 
-The hook fails open: any error, timeout or missing tool lets Claude run, with no
-output and exit 0. An unsure answer, or a failed `decide` step, also lets Claude
-run.
+The hook fails open: any error, timeout or missing tool lets Claude run, with
+exit 0. An unsure answer, or a failed `decide` step, also lets Claude run.
 
-Whatever puddlerouter adds to Claude's context is also shown to you, as a
-message above Claude's reply (the hook's `systemMessage`):
+In live mode every typed turn gets a note of what puddlerouter did. Claude is
+asked to start its reply with it, because in focus mode you see only Claude's
+reply and not hook messages; it is also the hook's `systemMessage`. For
+example:
 
 ```
-puddlerouter added this to Claude's context:
+> puddlerouter: sent to Claude (llm route at 0.98, 3.8 s)
 
-puddlerouter checked this with swamp before you ran (read-only: nothing was changed):
-- No worktree is at the head of #26, #22 or #21, the latest merged PRs; …
+> puddlerouter: not routed (an llm: prefix)
+
+> puddlerouter: no answer within 15 s, so this went to Claude as normal
+
+> puddlerouter added this to Claude's context (merged: no worktree at a merged head, 5.8 s):
+>
+> puddlerouter checked this with swamp before you ran (read-only: nothing was changed):
+> - No worktree is at the head of #30, #29 or #28, the latest merged PRs; …
 ```
+
+Empty turns, `!` shell turns and messages from the harness get no note. A
+blocked turn shows the answer in place of Claude's reply (below).
 
 In shadow mode the message starts "puddlerouter (shadow mode) would add this
 to Claude's context:" or "… would answer this without Claude:", and nothing is
-added or blocked. A turn live mode would pass shows nothing. Shadow mode now
+added or blocked, not even a note. A turn live mode would pass shows nothing.
+Shadow mode only uses `systemMessage`, so focus mode hides it. Shadow mode now
 waits for the workflow like live mode (1 to 6 seconds, up to
 `PUDDLEROUTER_TIMEOUT`); a run that times out is stopped, so it is missing from
 the shadow log.
