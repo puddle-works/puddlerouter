@@ -10,15 +10,14 @@ workflow, and Jev (TypeSafe's System One model) picks a route:
 | `decision`      | A yes/no judgement about text in the turn               | Jev answers it (built in step 2)                                                                                                                                                                                 |
 | `llm`           | Anything else, or Jev is unsure                         | Claude runs as normal                                                                                                                                                                                            |
 
-**Status: shadow mode; every route and the recipe packs are built (steps 2 to
-4, 6, 6b and 6c).** The hook logs what live mode would do and never blocks: Claude always
-runs, and when live mode would block or add a hint, a message shows you what it
-would have done. In live mode (`PUDDLEROUTER_MODE=live`) a yes/no question Jev answers
-confidently is blocked and Jev's answer is shown instead, and so is a git
-status, log or branch question a recipe answers. A turn that only says a PR
+**Status: live mode (step 5, 2026-10-26); every route and the recipe packs are
+built (steps 2 to 6c).** A yes/no question Jev answers confidently is blocked
+and Jev's answer is shown instead, and so is a git status, log or branch
+question a recipe answers. A turn that only says a PR
 has merged gets a read-only check and the steps to finish as a hint (see
-[Merged turns](#merged-turns)). Shadow mode stays the default
-until step 5, after a week of shadow data. See
+[Merged turns](#merged-turns)). Whatever the router adds or answers is shown
+to you. Shadow mode (`PUDDLEROUTER_MODE=shadow`) still works: it never blocks
+or adds anything, and only shows what live mode would have done. See
 [`docs/puddlerouter.md`](docs/puddlerouter.md) for the plan and the step 0
 findings.
 
@@ -253,7 +252,7 @@ Then add the hook to `~/.claude/settings.json` under `hooks.UserPromptSubmit`:
 ```
 
 Hook settings (environment): `PUDDLEROUTER=off` skips every turn;
-`PUDDLEROUTER_MODE=shadow|live` (default `shadow`); `PUDDLEROUTER_REPO` (default
+`PUDDLEROUTER_MODE=live|shadow` (default `live`); `PUDDLEROUTER_REPO` (default
 `~/dev/puddlerouter`); `PUDDLEROUTER_TIMEOUT` seconds to wait for swamp
 (default 15); `PUDDLEROUTER_KEY_CHECK=off` skips the daily key check, whose day stamp
 is kept in `PUDDLEROUTER_STATE` (default `~/.local/state/puddlerouter`).

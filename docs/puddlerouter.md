@@ -836,3 +836,24 @@ and `@swamp/typesafe-ai` expects `{models: [...]}`, so the check failed even
 with a working key. It now makes a small `choice` call, the same call a route
 step makes, so it fails exactly when routing would.
 
+## Step 5: live mode
+
+The owner gave the go-ahead on 2026-10-26, once Jev answered again. The hook's
+default mode is now `live` (`PUDDLEROUTER_MODE=shadow` still works), so
+`~/.claude/settings.json` no longer needs to set it. The workflow's own `mode`
+input still defaults to `shadow`, so a run started by hand changes nothing
+unless it asks for `live`.
+
+From 13 to 26 October the log has 355 replies. The figures that decided it:
+
+| Measure | Value |
+|---|---|
+| Shadow week (13 to 16 October) | 173 turns, 94% routed right (see [A week of real turns](#a-week-of-real-turns)) |
+| Jev chose `decision` | 7 times, highest confidence 0.61, so never at the 0.7 cut-off |
+| Live actions taken | 3 blocks (deterministic answers, 2 of them while testing on 13 October), 2 hints (merged turns) |
+| Turns with no route answer | 155, 149 of them from 21 to 24 October while Jev failed (#23) |
+
+**Decision on `decision`** (left for step 5 in [step 2](#step-2-decision-route)):
+keep it as it is. No turn has reached the cut-off, so it has never blocked a
+turn. It costs nothing extra, because it is one of the three choices in the
+same route call.

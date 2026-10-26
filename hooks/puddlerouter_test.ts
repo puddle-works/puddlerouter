@@ -92,6 +92,8 @@ async function runHook(
         FAKE_SWAMP_TEXT: "",
         TMPDIR: dir,
         PUDDLEROUTER_KEY_CHECK: "off",
+        // Most tests check shadow mode; the default is live (step 5).
+        PUDDLEROUTER_MODE: "shadow",
         ...env,
       },
     }).spawn();
@@ -193,6 +195,13 @@ Deno.test("does not count pasted text towards the limit", async () => {
   assertSilentPass(run);
   assertEquals(run.calls.length, 2);
   assertEquals(run.turn, prompt);
+});
+
+Deno.test("live mode is the default (step 5)", async () => {
+  const run = await runHook("list the open PRs", { PUDDLEROUTER_MODE: "" }, {
+    waitForSwamp: true,
+  });
+  assertMatch(run.calls[0], / --input mode=live /);
 });
 
 Deno.test("shadow mode runs the workflow with only the turn file's path", async () => {
