@@ -7,8 +7,8 @@ description: >-
   deterministic route a built-in recipe runs or Jev picks an extension that
   search found, and reply stores what the hook should do. In live mode a
   confident answer blocks the turn with Jev's or the recipe's answer, and a
-  deterministic turn nothing can answer raises one GitHub issue (live mode
-  only; one per distinct turn). A turn that only says a PR merged skips Jev:
+  deterministic turn nothing can answer logs one request in Capture (live
+  mode only; one per distinct turn). A turn that only says a PR merged skips Jev:
   the merged step checks the PR and its worktree read-only and the reply adds
   the steps to finish as context. In shadow mode the reply always passes, so the run
   is a log of what live mode would do. The route question must stay the same
@@ -43,10 +43,12 @@ inputs:
       type: number
       default: 0
       description: When the hook started, in ms since the epoch; reply records the time since.
-    issueRepo:
+    captureUrl:
       type: string
-      default: puddle-works/puddleworks-apps
-      description: The repo an issue is raised in when nothing can answer a deterministic turn (live mode only).
+      default: http://localhost:3001
+      description: >-
+        Capture's web address, for the link to a logged request. Keep it the
+        same as the capture instance's baseUrl.
     repoDir:
       type: string
       default: "."
@@ -266,9 +268,11 @@ jobs:
             repoDir: ${{ inputs.repoDir }}
       - name: raise
         description: >-
-          Raise one GitHub issue (de-duplicated by the turn's sourceRef) for a
-          deterministic turn that no recipe or allowlisted extension can
-          answer. Live mode only, so shadow mode has no side effects.
+          Log one request in Capture as a draft, through
+          @puddleworks/capture-log-request, for a deterministic turn that no
+          recipe or allowlisted extension can answer. The turn's sourceRef is
+          the Idempotency-Key, so the same turn gives the same request. Live
+          mode only, so shadow mode has no side effects.
         dependsOn:
           - step: match
             condition:
@@ -292,14 +296,12 @@ jobs:
           steps.pick.outputs.choice != "none" &&
           steps.pick.outputs.confidence >= inputs.cutoff)))) }}
         task:
-          type: model_method
-          modelIdOrName: github
-          methodName: create_issue
+          type: workflow
+          workflowIdOrName: "@puddleworks/capture-log-request"
           inputs:
-            repo: ${{ inputs.issueRepo }}
-            title: ${{ steps.match.outputs.issueTitle }}
-            body: ${{ steps.match.outputs.issueBody }}
-            idempotencyKey: ${{ steps.match.outputs.issueKey }}
+            title: ${{ steps.match.outputs.requestTitle }}
+            description: ${{ steps.match.outputs.requestDescription }}
+            sourceRef: ${{ steps.match.outputs.requestKey }}
       - name: reply
         description: Store what the hook should do. Runs whether or not Jev answered.
         dependsOn:
@@ -351,7 +353,7 @@ jobs:
             resultText: '${{ has(steps.execute) && has(steps.execute.outputs) ? steps.execute.outputs.text : "" }}'
             pickChoice: '${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.choice : "" }}'
             pickConfidence: "${{ has(steps.pick) && has(steps.pick.outputs) ? steps.pick.outputs.confidence : 0.0 }}"
-            issueUrl: '${{ has(steps.raise) && has(steps.raise.outputs) ? steps.raise.outputs.result : "" }}'
+            requestUrl: '${{ has(steps.raise) && has(steps.raise.outputs) ? inputs.captureUrl + "/requests/" + steps.raise.outputs["create-request"].id : "" }}'
             mergedMatched: "${{ has(steps.merged) && has(steps.merged.outputs) ? steps.merged.outputs.matched : false }}"
             mergedOk: "${{ has(steps.merged) && has(steps.merged.outputs) ? steps.merged.outputs.ok : false }}"
             mergedText: '${{ has(steps.merged) && has(steps.merged.outputs) ? steps.merged.outputs.text : "" }}'

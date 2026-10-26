@@ -285,11 +285,11 @@ Deno.test("shadow mode gives the reason when live mode would block with no text 
     FAKE_SWAMP_TEXT: "",
     FAKE_SWAMP_WOULD: "block",
     FAKE_SWAMP_WOULD_TEXT: "",
-    FAKE_SWAMP_REASON: "shadow: no extension found, would raise an issue",
+    FAKE_SWAMP_REASON: "shadow: no extension found, would log a request",
   });
   assertEquals(JSON.parse(run.stdout), {
     systemMessage:
-      "puddlerouter (shadow mode) would answer this without Claude (no extension found, would raise an issue).",
+      "puddlerouter (shadow mode) would answer this without Claude (no extension found, would log a request).",
   });
 });
 

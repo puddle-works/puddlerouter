@@ -3,7 +3,7 @@
  *
  * Run with: make test
  */
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
 import { parse } from "jsr:@std/yaml@1";
 
 interface Step {
@@ -11,7 +11,13 @@ interface Step {
   allowFailure?: boolean;
   guard?: string;
   dependsOn?: Array<{ step: string; condition: { type: string } }>;
-  task: { modelIdOrName?: string; methodName?: string; inputs?: unknown };
+  task: {
+    type?: string;
+    modelIdOrName?: string;
+    methodName?: string;
+    workflowIdOrName?: string;
+    inputs?: unknown;
+  };
 }
 interface Workflow {
   jobs: Array<{ steps: Step[] }>;
@@ -130,11 +136,11 @@ Deno.test("reply waits for pick and execute and gets their results", async () =>
   assert(inputs.matchKind.includes("steps.match.outputs.kind"));
 });
 
-Deno.test("raise only runs in live mode for a turn nothing can answer, keyed by sourceRef", async () => {
+Deno.test("raise logs a Capture request, only in live mode for a turn nothing can answer, keyed by sourceRef", async () => {
   const step = await stepOf("workflow-puddlerouter.yaml", "raise");
   assertEquals(step.allowFailure, true);
-  assertEquals(step.task.modelIdOrName, "github");
-  assertEquals(step.task.methodName, "create_issue");
+  assertEquals(step.task.type, "workflow");
+  assertEquals(step.task.workflowIdOrName, "@puddleworks/capture-log-request");
   const guard = step.guard ?? "";
   for (
     const part of [
@@ -145,13 +151,44 @@ Deno.test("raise only runs in live mode for a turn nothing can answer, keyed by 
     ]
   ) assert(guard.includes(part), `guard lacks ${part}`);
   const inputs = step.task.inputs as Record<string, string>;
-  assert(inputs.idempotencyKey.includes("steps.match.outputs.issueKey"));
+  assert(inputs.title.includes("steps.match.outputs.requestTitle"));
+  assert(inputs.description.includes("steps.match.outputs.requestDescription"));
+  assert(inputs.sourceRef.includes("steps.match.outputs.requestKey"));
   const reply = await stepOf("workflow-puddlerouter.yaml", "reply");
-  assert(
-    (reply.task.inputs as Record<string, string>).issueUrl.includes(
-      "steps.raise.outputs",
-    ),
+  const url = (reply.task.inputs as Record<string, string>).requestUrl;
+  for (
+    const part of [
+      "inputs.captureUrl",
+      '"/requests/"',
+      'steps.raise.outputs["create-request"].id',
+    ]
+  ) assert(url.includes(part), `requestUrl lacks ${part}`);
+});
+
+// capture-log-request calls this instance; its key stays in the capture vault.
+Deno.test("the capture instance signs in to the live Capture with the vault's key", async () => {
+  const def = await readYaml(
+    "models/@puddleworks/capture-client/capture.yaml",
+  ) as {
+    type: string;
+    name: string;
+    globalArguments: Record<string, string>;
+  };
+  assertEquals(def.type, "@puddleworks/capture-client");
+  assertEquals(def.name, "capture");
+  assertEquals(def.globalArguments.baseUrl, "http://localhost:3001");
+  assertMatch(
+    def.globalArguments.apiKey,
+    /^\$\{\{\s*vault\.get\(capture, api-key\)\s*\}\}$/,
   );
+  const wf = await readYaml("workflows/workflow-puddlerouter.yaml") as {
+    inputs: { properties: Record<string, { default?: unknown }> };
+  };
+  assertEquals(
+    wf.inputs.properties.captureUrl?.default,
+    def.globalArguments.baseUrl,
+  );
+  assertEquals(wf.inputs.properties.issueRepo, undefined);
 });
 
 async function readYaml(path: string) {

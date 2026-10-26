@@ -616,6 +616,12 @@ issue #95 and blocked; sending it again reused #95 (no second issue). #95 was
 closed afterwards with `close_issue`. `create_issue` takes no labels, so test
 issues are marked by their title rather than a `puddlerouter-test` label.
 
+**Changed on 2026-10-26:** `raise` now logs a draft request in Capture through
+`@puddleworks/capture-log-request` (from `@puddleworks/capture-client`) instead
+of opening a GitHub issue, with the turn's `sourceRef` as the Idempotency-Key.
+Capture is where the recipe backlog is agreed before it is built. See
+"Capture requests" in the README.
+
 ## Step 6: local config and a wider allowlist
 
 The allowlist is now `@swamp/*`, `@mesgme/*`, `@webframp/*` and `@puddleworks/*`,

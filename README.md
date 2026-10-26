@@ -6,7 +6,7 @@ workflow, and Jev (TypeSafe's System One model) picks a route:
 
 | Route           | Meaning                                                 | What happens (once built)                                                                                                                                                                                        |
 | --------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deterministic` | A program could answer it exactly through an API or CLI | A built-in recipe runs and its answer is shown (`@swamp/git` status, log, branch); otherwise Claude gets a hint naming an extension, or, if none fits, one GitHub issue is raised and its link shown (live mode) |
+| `deterministic` | A program could answer it exactly through an API or CLI | A built-in recipe runs and its answer is shown (`@swamp/git` status, log, branch); otherwise Claude gets a hint naming an extension, or, if none fits, one request is logged in Capture and its link shown (live mode) |
 | `decision`      | A yes/no judgement about text in the turn               | Jev answers it (built in step 2)                                                                                                                                                                                 |
 | `llm`           | Anything else, or Jev is unsure                         | Claude runs as normal                                                                                                                                                                                            |
 
@@ -45,8 +45,8 @@ prompt ─▶ hooks/puddlerouter.sh
              match  deterministic turn: a built-in recipe, else search extensions
              pick   jev.choice over up to 3 allowlisted candidates, or none
              execute run the recipe through swamp (@swamp/git), read-only
-             raise  live mode, nothing can answer: one issue per turn (sourceRef)
-                    in puddle-works/puddleworks-apps via @webframp/github
+             raise  live mode, nothing can answer: one Capture request per turn
+                    (sourceRef) via @puddleworks/capture-log-request
              reply  {action: block|hint|pass, text} → reply
 ```
 
@@ -214,17 +214,27 @@ A repeated turn makes no Jev call and no search subprocess:
 - **Result cache** (opt-in): a local recipe with `cacheFor: 30s`, `5m` or `1h`
   reuses its last successful answer for that long. No built-in recipe does.
 
-## Issues
+## Capture requests
 
 In live mode, a deterministic turn that no recipe or allowlisted extension can
-answer raises one GitHub issue ("Recipe wanted: …", with the cleaned turn text)
-in `puddle-works/puddleworks-apps`, and the hook shows its link instead of
-running Claude. `@webframp/github`'s `create_issue` de-duplicates on the turn's
-`sourceRef`, so sending the same turn again reuses the issue. It runs `gh` with
-your logged-in `gh auth` (no token in the vault) and is the only third-party
-extension used (also by the `merged` step, read-only): it is not pulled by the
-allowlist, only by this repo. Shadow
-mode never raises an issue; `wouldAction` records that it would.
+answer logs one request in [Capture](https://github.com/puddle-works/puddleworks-capture)
+("Recipe wanted: …", with the cleaned turn text and what search found), and
+the hook shows its link instead of running Claude. Those requests are the
+recipe backlog: they are discussed and agreed in Capture, then built. The
+`raise` step runs `@puddleworks/capture-log-request` from
+[`@puddleworks/capture-client`](https://github.com/puddle-works/puddleworks-capture-client),
+which sends the turn's `sourceRef` as the Idempotency-Key, so sending the same
+turn again gives the same request. It signs in as Intake Bot
+(`intake-bot@example.com`) with the API key in vault `capture`, key `api-key`,
+through the `capture` instance (`models/@puddleworks/capture-client/`). The
+link is `captureUrl` (default `http://localhost:3001`, the live Capture) plus
+`/requests/<id>`; keep it the same as the instance's `baseUrl`. If Capture is
+down or refuses the key, the turn passes to Claude ("no request logged").
+Shadow mode never logs a request; `wouldAction` records that it would.
+
+`@webframp/github` is still used, read-only, by the `merged` step, and by the
+key check to raise its issue. It runs `gh` with your logged-in `gh auth` (no
+token in the vault) and is pulled by this repo only, not by the allowlist.
 
 ## Key check
 
@@ -250,6 +260,7 @@ The runtime repo is the clone at `~/dev/puddlerouter`.
 cd ~/dev/puddlerouter
 swamp extension install                          # @swamp/typesafe-ai, pinned
 swamp vault put typesafe TYPESAFE_API_KEY        # the Jev key
+swamp vault put capture api-key                  # Intake Bot's Capture key (cap_…)
 make test
 ```
 
