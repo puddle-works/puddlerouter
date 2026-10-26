@@ -1,0 +1,6 @@
+id: 48ceb145-1805-4165-8821-d2330691db3c
+name: capture
+type: local_encryption
+config:
+  auto_generate: true
+createdAt: '2026-10-26T12:32:38.463Z'

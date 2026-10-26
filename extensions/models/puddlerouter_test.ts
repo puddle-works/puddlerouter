@@ -17,12 +17,12 @@ import {
   effectiveRoute,
   executeRecipe,
   findMatch,
-  issueDraft,
   loadTurn,
   looksSecret,
   model,
   normalise,
   recallRoute,
+  requestDraft,
   resultCacheKey,
   ROUTE_CACHE_VERSION,
   routeCacheKey,
@@ -570,7 +570,7 @@ Deno.test("buildReply passes when the pick is none, unsure or out of range", () 
       pickConfidence,
     });
     assertEquals(r.action, "pass");
-    assertEquals(r.reason, "no extension found, no issue raised");
+    assertEquals(r.reason, "no extension found, no request logged");
   }
 });
 
@@ -632,10 +632,10 @@ Deno.test("findMatch offers only allowlisted extensions", async () => {
   assertEquals(m.candidates.map((c) => c.name), ["@swamp/hetzner-cloud"]);
 });
 
-// ---- step 4: raise an issue when nothing can answer ----
+// ---- step 4: log a Capture request when nothing can answer ----
 
-Deno.test("issueDraft makes a one-line title, a body with the turn, and a key", () => {
-  const d = issueDraft(
+Deno.test("requestDraft makes a one-line title, a plain description with the turn, and a key", () => {
+  const d = requestDraft(
     "list the hetzner servers\nin my account " + "x".repeat(200),
     "puddlerouter:0123456789abcdef",
     "hetzner servers account",
@@ -644,14 +644,16 @@ Deno.test("issueDraft makes a one-line title, a body with the turn, and a key", 
   assert(d.title.startsWith("Recipe wanted: list the hetzner servers in my"));
   assert(d.title.length <= 100, `${d.title.length}`);
   assert(!d.title.includes("\n"));
-  assertMatch(d.body, /> list the hetzner servers\n> in my account/);
-  assertMatch(d.body, /puddlerouter:0123456789abcdef/);
-  assertMatch(d.body, /hetzner servers account/);
-  assertMatch(d.body, /@swamp\/hetzner-cloud/);
+  assert(d.description.startsWith("list the hetzner servers\nin my account"));
+  assert(!d.description.includes("> "), "no Markdown quoting");
+  assert(!d.description.includes("`"), "no Markdown code");
+  assertMatch(d.description, /puddlerouter:0123456789abcdef/);
+  assertMatch(d.description, /hetzner servers account/);
+  assertMatch(d.description, /@swamp\/hetzner-cloud/);
   assertEquals(d.key, "puddlerouter:0123456789abcdef");
 });
 
-Deno.test("findMatch carries the issue draft for a turn nothing can answer", async () => {
+Deno.test("findMatch carries the request draft for a turn nothing can answer", async () => {
   const m = await findMatch(
     "list the hetzner servers",
     fakeExec({}).exec,
@@ -659,41 +661,42 @@ Deno.test("findMatch carries the issue draft for a turn nothing can answer", asy
     "puddlerouter:0123456789abcdef",
   );
   assertEquals(m.kind, "none");
-  assertEquals(m.issueKey, "puddlerouter:0123456789abcdef");
-  assertMatch(m.issueTitle, /^Recipe wanted: list the hetzner servers/);
-  assertMatch(m.issueBody, /Raised by puddlerouter/);
+  assertEquals(m.requestKey, "puddlerouter:0123456789abcdef");
+  assertMatch(m.requestTitle, /^Recipe wanted: list the hetzner servers/);
+  assertMatch(m.requestDescription, /Logged by puddlerouter/);
 });
 
-Deno.test("buildReply blocks with the issue link when one was raised", () => {
+Deno.test("buildReply blocks with the request link when one was logged", () => {
   const r = buildReply({
     ...detArgs,
     matchKind: "none",
-    issueUrl: "https://github.com/puddle-works/puddleworks-apps/issues/7",
+    requestUrl: "http://localhost:3001/requests/req_7",
   });
   assertEquals(r.action, "block");
-  assertMatch(r.text, /issues\/7/);
-  assertMatch(r.text, /starting with llm:/);
-  assertEquals(
-    r.issue,
-    "https://github.com/puddle-works/puddleworks-apps/issues/7",
+  assertMatch(
+    r.text,
+    /Logged a request in Capture: http:\/\/localhost:3001\/requests\/req_7/,
   );
-  assertEquals(r.reason, "no extension found, issue raised");
+  assertMatch(r.text, /starting with llm:/);
+  assertEquals(r.request, "http://localhost:3001/requests/req_7");
+  assertEquals(r.reason, "no extension found, request logged");
 });
 
-Deno.test("buildReply passes when the issue could not be raised", () => {
-  const r = buildReply({ ...detArgs, matchKind: "none", issueUrl: "" });
+Deno.test("buildReply passes when the request could not be logged", () => {
+  const r = buildReply({ ...detArgs, matchKind: "none", requestUrl: "" });
   assertEquals(r.action, "pass");
-  assertEquals(r.reason, "no extension found, no issue raised");
+  assertEquals(r.request, "");
+  assertEquals(r.reason, "no extension found, no request logged");
 });
 
-Deno.test("buildReply in shadow mode records that live would raise an issue", () => {
+Deno.test("buildReply in shadow mode records that live would log a request", () => {
   const r = buildReply({ ...detArgs, mode: "shadow", matchKind: "none" });
   assertEquals(r.action, "pass");
   assertEquals(r.wouldAction, "block");
-  assertMatch(r.reason, /would raise an issue/);
+  assertMatch(r.reason, /would log a request/);
 });
 
-Deno.test("buildReply does not raise an issue for a failed recipe or a hint", () => {
+Deno.test("buildReply does not log a request for a failed recipe or a hint", () => {
   const failed = buildReply({
     ...detArgs,
     matchKind: "recipe",
@@ -1462,7 +1465,7 @@ Deno.test("buildReply ignores a merged check that did not match", () => {
     mergedText: MERGED_TEXT,
   });
   assertEquals(r.recipe, "");
-  assertEquals(r.reason, "no extension found, no issue raised");
+  assertEquals(r.reason, "no extension found, no request logged");
 });
 
 Deno.test("merged writes matched false and calls nothing for other turns", async () => {

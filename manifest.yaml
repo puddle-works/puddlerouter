@@ -16,3 +16,4 @@ workflows:
 dependencies:
   - "@swamp/git"
   - "@webframp/github"
+  - "@puddleworks/capture-client"
