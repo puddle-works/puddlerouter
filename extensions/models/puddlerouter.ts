@@ -272,6 +272,8 @@ export const ReplySchema = z.object({
   text: z.string(),
   /** What live mode does: the same as `action` unless the mode is shadow. */
   wouldAction: z.enum(["block", "hint", "pass"]),
+  /** The text live mode uses; in shadow mode the hook shows it to the user. */
+  wouldText: z.string(),
   mode: z.enum(["shadow", "live"]),
   /** The route taken after the cut-off. */
   route: z.enum(ROUTES),
@@ -969,6 +971,7 @@ export function buildReply(
     action: shadow ? "pass" : wouldAction,
     text: shadow ? "" : text,
     wouldAction,
+    wouldText: text,
     mode: args.mode,
     route,
     choice,

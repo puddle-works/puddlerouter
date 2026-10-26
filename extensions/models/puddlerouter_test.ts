@@ -222,8 +222,16 @@ Deno.test("buildReply in shadow mode passes but records what live would do", () 
   assertEquals(reply.action, "pass");
   assertEquals(reply.text, "");
   assertEquals(reply.wouldAction, "block");
+  assertMatch(reply.wouldText, /^Jev: yes/);
   assertEquals(reply.answer, "yes");
   assertEquals(reply.reason, "shadow: decision answered yes");
+});
+
+Deno.test("buildReply in live mode gives the same text as wouldText", () => {
+  const reply = buildReply({ ...DECIDED, mode: "live", yes: 0.95 });
+  assertEquals(reply.wouldText, reply.text);
+  const passed = buildReply({ ...DECIDED, mode: "live", yes: 0.5 });
+  assertEquals(passed.wouldText, "");
 });
 
 Deno.test("buildReply records the time since the hook started", () => {
@@ -1427,6 +1435,7 @@ Deno.test("buildReply in shadow mode records the merged hint and passes", () => 
   assertEquals(r.action, "pass");
   assertEquals(r.text, "");
   assertEquals(r.wouldAction, "hint");
+  assertEquals(r.wouldText, MERGED_TEXT);
   assertEquals(r.reason, "shadow: merged: #12 clean");
 });
 

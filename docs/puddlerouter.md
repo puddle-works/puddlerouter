@@ -9,6 +9,7 @@
 - [Step 6b: caches](#step-6b-caches)
 - [Step 6c: recipe packs, `recipeIndex` and the sync workflow](#step-6c-recipe-packs-recipeindex-and-the-sync-workflow)
 - [Merged turns (issue #24)](#merged-turns-issue-24)
+- [Showing the user what was added](#showing-the-user-what-was-added)
 
 ## Step 0: checks
 
@@ -787,3 +788,40 @@ are test turns, not ones from the shadow log.
 
 On an unmatched turn the step adds about 1 second: one regex and the swamp step
 itself.
+
+## Showing the user what was added
+
+A hint goes to Claude as `additionalContext`, which the user does not see, and
+shadow mode ran in the background, so the user saw nothing in either mode. The
+owner asked to see what puddlerouter adds.
+
+### Decisions
+
+- **A `systemMessage` beside every hint.** Live mode shows "puddlerouter added
+  this to Claude's context:" and the same text. A block already shows its text
+  in place of Claude's reply, so it gets no extra message. A pass shows nothing.
+- **Shadow mode waits and shows what live mode would do.** The owner chose this
+  over a live-only message, accepting the wait on every routed turn. Shadow mode
+  still adds no context and never blocks. `reply.wouldText` (new) holds the text
+  live mode would use, since `text` stays empty in shadow mode. A block with no
+  text yet (an issue live mode would raise) shows the reason instead.
+- **A shadow run that times out is stopped** (`PUDDLEROUTER_TIMEOUT`, default
+  15 s), as in live mode, so it is missing from the shadow log. Before this
+  change a shadow run always finished in the background.
+
+### Live check (2026-10-26)
+
+The real hook ran "merged." from the runtime repo with the workflow from the
+feature worktree. Shadow mode printed only the `systemMessage` (5 s). Live mode
+printed `additionalContext` and the same text as a `systemMessage` (6 s).
+
+### Mode in use
+
+`~/.claude/settings.json` has run the hook with `PUDDLEROUTER_MODE=live` since
+21 October (from the 22nd every reply has `mode: live`), so step 5's switch has
+already been made in practice. Since then almost every turn has passed with
+"no route answer", because Jev's key fails (#23, raised by the key check on
+23 October): 44 of 50 turns on 21 October, then 36 of 36, 65 of 81 and 4 of 4.
+Only turns that need no Jev call (the `merged` step, cached routes) are still
+routed.
+

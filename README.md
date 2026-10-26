@@ -12,7 +12,8 @@ workflow, and Jev (TypeSafe's System One model) picks a route:
 
 **Status: shadow mode; every route and the recipe packs are built (steps 2 to
 4, 6, 6b and 6c).** The hook logs what live mode would do and never blocks: Claude always
-runs. In live mode (`PUDDLEROUTER_MODE=live`) a yes/no question Jev answers
+runs, and when live mode would block or add a hint, a message shows you what it
+would have done. In live mode (`PUDDLEROUTER_MODE=live`) a yes/no question Jev answers
 confidently is blocked and Jev's answer is shown instead, and so is a git
 status, log or branch question a recipe answers. A turn that only says a PR
 has merged gets a read-only check and the steps to finish as a hint (see
@@ -53,6 +54,23 @@ prompt ─▶ hooks/puddlerouter.sh
 The hook fails open: any error, timeout or missing tool lets Claude run, with no
 output and exit 0. An unsure answer, or a failed `decide` step, also lets Claude
 run.
+
+Whatever puddlerouter adds to Claude's context is also shown to you, as a
+message above Claude's reply (the hook's `systemMessage`):
+
+```
+puddlerouter added this to Claude's context:
+
+puddlerouter checked this with swamp before you ran (read-only: nothing was changed):
+- No worktree is at the head of #26, #22 or #21, the latest merged PRs; …
+```
+
+In shadow mode the message starts "puddlerouter (shadow mode) would add this
+to Claude's context:" or "… would answer this without Claude:", and nothing is
+added or blocked. A turn live mode would pass shows nothing. Shadow mode now
+waits for the workflow like live mode (1 to 6 seconds, up to
+`PUDDLEROUTER_TIMEOUT`); a run that times out is stopped, so it is missing from
+the shadow log.
 
 A blocked decision shows, in place of Claude's reply:
 
@@ -235,8 +253,8 @@ Then add the hook to `~/.claude/settings.json` under `hooks.UserPromptSubmit`:
 
 Hook settings (environment): `PUDDLEROUTER=off` skips every turn;
 `PUDDLEROUTER_MODE=shadow|live` (default `shadow`); `PUDDLEROUTER_REPO` (default
-`~/dev/puddlerouter`); `PUDDLEROUTER_TIMEOUT` seconds for live mode (default
-15); `PUDDLEROUTER_KEY_CHECK=off` skips the daily key check, whose day stamp
+`~/dev/puddlerouter`); `PUDDLEROUTER_TIMEOUT` seconds to wait for swamp
+(default 15); `PUDDLEROUTER_KEY_CHECK=off` skips the daily key check, whose day stamp
 is kept in `PUDDLEROUTER_STATE` (default `~/.local/state/puddlerouter`).
 Start a turn with `llm:` to skip the router for that turn.
 

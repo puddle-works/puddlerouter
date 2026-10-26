@@ -5,11 +5,13 @@
 # a mktemp file and only its path is passed: swamp reads an `--input` value
 # starting with `@` as a file, and records every input in its run history.
 #
-# shadow (default): starts the workflow in the background and exits at once.
-#   Claude always runs; the run is a log of the route Jev would take.
-# live: waits for the workflow and acts on its `reply`:
+# Both modes wait for the workflow and read its `reply`.
+# shadow (default): Claude always runs and gets no added context. When live
+#   mode would block or hint, a systemMessage tells the user what it would do.
+# live: acts on the reply:
 #   block -> {"decision":"block","reason":text}   (Claude does not run)
-#   hint  -> additionalContext text                (Claude runs with it)
+#   hint  -> additionalContext text, and a systemMessage showing the user
+#            what was added                       (Claude runs with it)
 #   pass  -> nothing
 #
 # Fails open: on any error or timeout it exits 0 with no output, so Claude
@@ -19,7 +21,7 @@
 #   PUDDLEROUTER=off         skip every turn
 #   PUDDLEROUTER_MODE        shadow (default) or live
 #   PUDDLEROUTER_REPO        swamp repo to run in (default ~/dev/puddlerouter)
-#   PUDDLEROUTER_TIMEOUT     live mode: seconds to wait for swamp (default 15)
+#   PUDDLEROUTER_TIMEOUT     seconds to wait for swamp (default 15)
 #   PUDDLEROUTER_SWAMP       swamp binary (default swamp; tests use a fake)
 #   PUDDLEROUTER_KEY_CHECK=off  skip the daily key check
 #   PUDDLEROUTER_STATE       where the key check's day stamp is kept
@@ -91,14 +93,6 @@ run_args=(workflow run @puddleworks/puddlerouter --repo-dir "$REPO"
   --input "turnFile=$turn" --input "mode=$MODE"
   --input "hookStartedAt=$started" --input "repoDir=$REPO")
 
-if [ "$MODE" = shadow ]; then
-  (
-    "$SWAMP" "${run_args[@]}"
-    rm -f "$turn"
-  ) </dev/null >/dev/null 2>&1 &
-  exit 0
-fi
-
 out=$(mktemp "${TMPDIR:-/tmp}/puddlerouter-run.XXXXXX") || { rm -f "$turn"; exit 0; }
 trap 'rm -f "$turn" "$out"' EXIT
 deadline=$((SECONDS + LIMIT))
@@ -123,12 +117,22 @@ run_id=$(jq -r 'select(.status == "succeeded") | .id // empty' "$out") || exit 0
 
 swamp_until_deadline workflow history outputs "$run_id" --repo-dir "$REPO" \
   --json || exit 0
-jq -c '
-  .reply // {} | (.text // "") as $t
-  | if .action == "block" and $t != "" then {decision: "block", reason: $t}
-    elif .action == "hint" and $t != "" then
-      {hookSpecificOutput: {hookEventName: "UserPromptSubmit",
-                            additionalContext: $t}}
+jq -c --arg mode "$MODE" '
+  .reply // {} | (.text // "") as $t | (.wouldText // "") as $w
+  | ((.reason // "") | sub("^shadow: "; "")) as $why
+  | if $mode == "live" then
+      if .action == "block" and $t != "" then {decision: "block", reason: $t}
+      elif .action == "hint" and $t != "" then
+        {hookSpecificOutput: {hookEventName: "UserPromptSubmit",
+                              additionalContext: $t},
+         systemMessage: "puddlerouter added this to Claude'"'"'s context:\n\n\($t)"}
+      else empty end
+    elif .wouldAction == "hint" and $w != "" then
+      {systemMessage: "puddlerouter (shadow mode) would add this to Claude'"'"'s context:\n\n\($w)"}
+    elif .wouldAction == "block" and $w != "" then
+      {systemMessage: "puddlerouter (shadow mode) would answer this without Claude:\n\n\($w)"}
+    elif .wouldAction == "block" then
+      {systemMessage: "puddlerouter (shadow mode) would answer this without Claude (\($why))."}
     else empty end
 ' "$out"
 exit 0
