@@ -3,7 +3,9 @@
  *
  * Each test feeds the hook the JSON Claude Code sends on stdin. The fake
  * swamp records its arguments and the turn file's text, then answers as told
- * by FAKE_SWAMP_REPLY (a reply action), FAKE_SWAMP_FAIL or FAKE_SWAMP_HANG.
+ * by FAKE_SWAMP_REPLY (a reply action), FAKE_SWAMP_WOULD and
+ * FAKE_SWAMP_WOULD_TEXT (what live mode would do, for shadow mode),
+ * FAKE_SWAMP_REASON, FAKE_SWAMP_FAIL or FAKE_SWAMP_HANG.
  *
  * Run with: make test
  */
@@ -23,7 +25,11 @@ case "$1 $2" in
   "workflow run") echo '{"id":"run-1","status":"succeeded"}' ;;
   "workflow history")
     jq -n --arg a "$FAKE_SWAMP_REPLY" --arg t "$FAKE_SWAMP_TEXT" \\
-      '{reply: {action: $a, text: $t}}' ;;
+      --arg w "\${FAKE_SWAMP_WOULD:-$FAKE_SWAMP_REPLY}" \\
+      --arg wt "\${FAKE_SWAMP_WOULD_TEXT-$FAKE_SWAMP_TEXT}" \\
+      --arg r "\${FAKE_SWAMP_REASON:-}" \\
+      '{reply: {action: $a, text: $t, wouldAction: $w, wouldText: $wt,
+                reason: $r}}' ;;
 esac
 `;
 
@@ -165,7 +171,7 @@ Deno.test("does not count surrounding whitespace towards the limit", async () =>
     waitForSwamp: true,
   });
   assertSilentPass(run);
-  assertEquals(run.calls.length, 1);
+  assertEquals(run.calls.length, 2);
 });
 
 Deno.test("runs a turn that starts with pasted text", async () => {
@@ -174,7 +180,7 @@ Deno.test("runs a turn that starts with pasted text", async () => {
   }\n\nis this a good commit message?\n`;
   const run = await runHook(prompt, {}, { waitForSwamp: true });
   assertSilentPass(run);
-  assertEquals(run.calls.length, 1);
+  assertEquals(run.calls.length, 2);
   assertEquals(
     run.turn,
     `${pasted("fix stuff")}\n\nis this a good commit message?`,
@@ -185,7 +191,7 @@ Deno.test("does not count pasted text towards the limit", async () => {
   const prompt = `is this a good summary? ${pasted("a".repeat(5000))}`;
   const run = await runHook(prompt, {}, { waitForSwamp: true });
   assertSilentPass(run);
-  assertEquals(run.calls.length, 1);
+  assertEquals(run.calls.length, 2);
   assertEquals(run.turn, prompt);
 });
 
@@ -193,11 +199,11 @@ Deno.test("shadow mode runs the workflow with only the turn file's path", async 
   const prompt = "  is 'fix stuff' a good commit message? ${{ env.HOME }}\n";
   const run = await runHook(prompt, {}, { waitForSwamp: true });
   assertSilentPass(run);
-  assertEquals(run.calls.length, 1);
+  assertEquals(run.calls.length, 2);
   const call = run.calls[0];
   assertMatch(
     call,
-    /^workflow run @puddleworks\/puddlerouter --repo-dir \S+ --input turnFile=\/\S+ --input mode=shadow --input hookStartedAt=\d{13} --input repoDir=\S+$/,
+    /^workflow run @puddleworks\/puddlerouter --repo-dir \S+ --input turnFile=\/\S+ --input mode=shadow --input hookStartedAt=\d{13} --input repoDir=\S+ --json$/,
   );
   assert(
     !call.includes("fix stuff"),
@@ -209,17 +215,61 @@ Deno.test("shadow mode runs the workflow with only the turn file's path", async 
   );
 });
 
-Deno.test("shadow mode does not wait for swamp", async () => {
-  const run = await runHook("list the open PRs", { FAKE_SWAMP_HANG: "1" });
+Deno.test("shadow mode fails open when swamp hangs past the timeout", async () => {
+  const run = await runHook("list the open PRs", {
+    PUDDLEROUTER_TIMEOUT: "1",
+    FAKE_SWAMP_HANG: "1",
+  });
   assertSilentPass(run);
-  assert(run.ms < 2000, `took ${run.ms} ms`);
+  assert(run.ms < 4000, `took ${run.ms} ms`);
 });
 
-Deno.test("shadow mode ignores a block reply", async () => {
+Deno.test("shadow mode never blocks, but tells the user what live mode would answer", async () => {
   const run = await runHook("is this ok?", {
-    FAKE_SWAMP_REPLY: "block",
-    FAKE_SWAMP_TEXT: "No.",
-  }, { waitForSwamp: true });
+    FAKE_SWAMP_REPLY: "pass",
+    FAKE_SWAMP_TEXT: "",
+    FAKE_SWAMP_WOULD: "block",
+    FAKE_SWAMP_WOULD_TEXT: "Jev: no (96% sure).",
+  });
+  assertEquals(run.code, 0);
+  assertEquals(JSON.parse(run.stdout), {
+    systemMessage:
+      "puddlerouter (shadow mode) would answer this without Claude:\n\nJev: no (96% sure).",
+  });
+});
+
+Deno.test("shadow mode adds no context, but shows the user the hint live mode would add", async () => {
+  const run = await runHook("merged", {
+    FAKE_SWAMP_REPLY: "pass",
+    FAKE_SWAMP_TEXT: "",
+    FAKE_SWAMP_WOULD: "hint",
+    FAKE_SWAMP_WOULD_TEXT: "No worktree is at #26's head.",
+  });
+  assertEquals(run.code, 0);
+  assertEquals(JSON.parse(run.stdout), {
+    systemMessage:
+      "puddlerouter (shadow mode) would add this to Claude's context:\n\nNo worktree is at #26's head.",
+  });
+});
+
+Deno.test("shadow mode gives the reason when live mode would block with no text yet", async () => {
+  const run = await runHook("list the hetzner servers", {
+    FAKE_SWAMP_REPLY: "pass",
+    FAKE_SWAMP_TEXT: "",
+    FAKE_SWAMP_WOULD: "block",
+    FAKE_SWAMP_WOULD_TEXT: "",
+    FAKE_SWAMP_REASON: "shadow: no extension found, would raise an issue",
+  });
+  assertEquals(JSON.parse(run.stdout), {
+    systemMessage:
+      "puddlerouter (shadow mode) would answer this without Claude (no extension found, would raise an issue).",
+  });
+});
+
+Deno.test("shadow mode prints nothing when live mode would pass", async () => {
+  const run = await runHook("refactor the reply method", {
+    FAKE_SWAMP_REPLY: "pass",
+  });
   assertSilentPass(run);
 });
 
@@ -279,6 +329,8 @@ Deno.test("live mode turns a hint reply into additionalContext", async () => {
       hookEventName: "UserPromptSubmit",
       additionalContext: "Use @webframp/github list_prs.",
     },
+    systemMessage:
+      "puddlerouter added this to Claude's context:\n\nUse @webframp/github list_prs.",
   });
 });
 
