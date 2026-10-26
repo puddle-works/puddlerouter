@@ -376,3 +376,20 @@ Deno.test("the manifest ships the worktree_list extension and its dependencies",
   };
   assertEquals([git.type, git.name], ["@swamp/git", "git"]);
 });
+
+Deno.test("every manifest dependency is pinned in upstream_extensions.json", async () => {
+  const manifest = await readYaml("manifest.yaml") as {
+    dependencies?: string[];
+  };
+  const path = new URL(
+    "../extensions/models/upstream_extensions.json",
+    import.meta.url,
+  );
+  const lock = JSON.parse(await Deno.readTextFile(path)) as Record<
+    string,
+    { version: string }
+  >;
+  for (const dep of manifest.dependencies ?? []) {
+    assert(lock[dep]?.version, `upstream_extensions.json lacks ${dep}`);
+  }
+});
