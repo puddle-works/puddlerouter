@@ -883,3 +883,49 @@ reply, not hook messages. The hook's output was right (checked by hand on a
 Checked against the runtime repo on 2026-10-26: an `llm` turn noted "sent to
 Claude (llm route at 0.98, 3.8 s)", a `merged` turn carried its hint (5.8 s),
 and an `llm:` turn noted "not routed (an llm: prefix)" without calling swamp.
+
+## Write recipes: the gate (issue #27)
+
+The `merged` step only gives Claude a hint, and Claude runs the steps. Issue
+#27 asked how puddlerouter may make changes itself, starting with merged
+turns. The owner decided on 2026-10-26.
+
+Orca removes a PR's worktree when the PR merges, so for orca work a merged turn
+nearly always comes back `absent`, not `clean`. What is left to do then is the
+remote branch, any local branch, and pulling main. A gate that acted on `clean`
+only would hardly ever run.
+
+### Decisions
+
+1. **The gate: act on `absent` and `clean`, after one confirmation.** A merged
+   turn shows the plan and asks for a yes (a block, so the user sees it in place
+   of Claude's reply). The next turn in the same session, if it is only a yes
+   ("yes", "y", "go"), runs the plan, and the result is shown the same way. Any
+   other turn drops the plan, and it is routed as usual. A plan is also dropped
+   after 10 minutes. `primary`, `dirty`, `locked`, `ahead`, `open`, `closed` and
+   `error` still get a hint only, as now. Confirmation is "for now": acting
+   without it is a later decision for the owner.
+2. **Shadow mode** shows the plan, never asks for a yes, and runs nothing. No
+   separate shadow period is needed in live mode, since nothing runs until the
+   user says yes.
+3. **Re-check before acting.** The yes turn checks every step again before it
+   runs it: the PR is still merged, a `clean` worktree is still at the PR's head
+   with no changes and is not locked, and every branch to delete still points at
+   the PR's head or at a commit on `origin/main`. A step that fails its check is
+   skipped and reported. The steps after it still run if they don't depend on
+   it.
+4. **The remote branch.** It is deleted only if it still points at the PR's
+   head, and with `--force-with-lease`, so a push in between makes the delete
+   fail rather than lose commits. A branch GitHub already deleted is reported
+   ("already deleted on GitHub"), not treated as a failure.
+5. **Running the git writes.** `@swamp/git` has `remove_worktree` (refuses the
+   primary checkout and dirty worktrees, and does nothing if it is already gone),
+   `pull` (with `ffOnly`) and `remote_ref` (`git ls-remote`). It has no branch
+   delete, so `git_worktrees.ts`'s extension adds `branch_delete` (local,
+   `git branch -d`) and `remote_branch_delete` (`git push --force-with-lease`
+   with the expected SHA). main is pulled with `ffOnly`, and only when the main
+   checkout is on main and clean.
+6. **Which write recipe comes next** (pull checkouts or start worktree, from
+   #13) is not decided yet. #13 stays open for it.
+
+The recipe itself is built in #24.
