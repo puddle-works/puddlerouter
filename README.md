@@ -221,15 +221,18 @@ answer logs one request in [Capture](https://github.com/puddle-works/puddleworks
 ("Recipe wanted: …", with the cleaned turn text and what search found), and
 the hook shows its link instead of running Claude. Those requests are the
 recipe backlog: they are discussed and agreed in Capture, then built. The
-`raise` step runs `@puddleworks/capture-log-request` from
-[`@puddleworks/capture-client`](https://github.com/puddle-works/puddleworks-capture-client),
-which sends the turn's `sourceRef` as the Idempotency-Key, so sending the same
-turn again gives the same request. It signs in as Intake Bot
-(`intake-bot@example.com`) with the API key in vault `capture`, key `api-key`,
-through the `capture` instance (`models/@puddleworks/capture-client/`). The
-link is `captureUrl` (default `http://localhost:3001`, the live Capture) plus
-`/requests/<id>`; keep it the same as the instance's `baseUrl`. If Capture is
-down or refuses the key, the turn passes to Claude ("no request logged").
+`raise` step runs `@puddleworks/capture-log-request` from the swamp extension
+[`@puddleworks/capture`](https://github.com/puddle-works/puddleworks-capture),
+which passes the turn's `sourceRef` as the idempotency key, so sending the same
+turn again gives the same request. Capture's people and requests are this
+repo's swamp data, in the `capture` instance
+(`models/@puddleworks/capture/requests/`), which acts as Intake Bot
+(`intake-bot@example.com`, its `defaultAs`). There is no key. To read them,
+run `swamp behavior run viewer serve --input port=3002` and open
+http://127.0.0.1:3002. The link is `captureUrl` (default
+`http://127.0.0.1:3002`) plus `/requests/<id>`; keep it the same as the
+instance's `appUrl`. If logging fails, the turn passes to Claude ("no request
+logged").
 Shadow mode never logs a request; `wouldAction` records that it would.
 
 `@webframp/github` is still used, read-only, by the `merged` step, and by the
@@ -260,7 +263,6 @@ The runtime repo is the clone at `~/dev/puddlerouter`.
 cd ~/dev/puddlerouter
 swamp extension install                          # @swamp/typesafe-ai, pinned
 swamp vault put typesafe TYPESAFE_API_KEY        # the Jev key
-swamp vault put capture api-key                  # Intake Bot's Capture key (cap_…)
 make test
 ```
 
