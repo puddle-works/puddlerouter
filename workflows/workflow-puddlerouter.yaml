@@ -45,10 +45,10 @@ inputs:
       description: When the hook started, in ms since the epoch; reply records the time since.
     captureUrl:
       type: string
-      default: http://localhost:3001
+      default: http://127.0.0.1:3002
       description: >-
         Capture's web address, for the link to a logged request. Keep it the
-        same as the capture instance's baseUrl.
+        same as the capture instance's appUrl.
     repoDir:
       type: string
       default: "."

@@ -622,6 +622,11 @@ of opening a GitHub issue, with the turn's `sourceRef` as the Idempotency-Key.
 Capture is where the recipe backlog is agreed before it is built. See
 "Capture requests" in the README.
 
+**Changed on 2026-10-27:** Capture is now the swamp extension
+`@puddleworks/capture`, and its requests live in this repo's swamp data. The
+`capture` instance is `@puddleworks/capture/requests`, acting as Intake Bot, so
+there is no API key; the workflow's name and inputs are unchanged.
+
 ## Step 6: local config and a wider allowlist
 
 The allowlist is now `@swamp/*`, `@mesgme/*`, `@webframp/*` and `@puddleworks/*`,

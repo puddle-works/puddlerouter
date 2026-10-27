@@ -3,7 +3,7 @@
  *
  * Run with: make test
  */
-import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
+import { assert, assertEquals } from "jsr:@std/assert@1";
 import { parse } from "jsr:@std/yaml@1";
 
 interface Step {
@@ -165,30 +165,38 @@ Deno.test("raise logs a Capture request, only in live mode for a turn nothing ca
   ) assert(url.includes(part), `requestUrl lacks ${part}`);
 });
 
-// capture-log-request calls this instance; its key stays in the capture vault.
-Deno.test("the capture instance signs in to the live Capture with the vault's key", async () => {
+// capture-log-request calls this instance; Capture's requests live in this
+// repo's swamp data, logged as Intake Bot so its earlier sourceRefs still match.
+Deno.test("the capture instance keeps Capture here and logs as Intake Bot", async () => {
   const def = await readYaml(
-    "models/@puddleworks/capture-client/capture.yaml",
+    "models/@puddleworks/capture/requests/capture.yaml",
   ) as {
     type: string;
     name: string;
     globalArguments: Record<string, string>;
   };
-  assertEquals(def.type, "@puddleworks/capture-client");
+  assertEquals(def.type, "@puddleworks/capture/requests");
   assertEquals(def.name, "capture");
-  assertEquals(def.globalArguments.baseUrl, "http://localhost:3001");
-  assertMatch(
-    def.globalArguments.apiKey,
-    /^\$\{\{\s*vault\.get\(capture, api-key\)\s*\}\}$/,
-  );
+  assertEquals(def.globalArguments.defaultAs, "intake-bot@example.com");
+  assertEquals(def.globalArguments.appUrl, "http://127.0.0.1:3002");
+  const viewer = await readYaml(
+    "models/@puddleworks/capture/web/viewer.yaml",
+  ) as { type: string; name: string };
+  assertEquals(viewer.type, "@puddleworks/capture/web");
+  assertEquals(viewer.name, "viewer");
   const wf = await readYaml("workflows/workflow-puddlerouter.yaml") as {
     inputs: { properties: Record<string, { default?: unknown }> };
   };
   assertEquals(
     wf.inputs.properties.captureUrl?.default,
-    def.globalArguments.baseUrl,
+    def.globalArguments.appUrl,
   );
   assertEquals(wf.inputs.properties.issueRepo, undefined);
+  const manifest = await readYaml("manifest.yaml") as {
+    dependencies: string[];
+  };
+  assert(manifest.dependencies.includes("@puddleworks/capture"));
+  assert(!manifest.dependencies.includes("@puddleworks/capture-client"));
 });
 
 async function readYaml(path: string) {
