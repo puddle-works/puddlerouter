@@ -64,8 +64,8 @@
     "publishedChannel": "stable"
   },
   "@puddleworks/capture": {
-    "version": "2026.10.27.3",
-    "pulledAt": "2026-10-27T11:21:55.770Z",
+    "version": "2026.10.27.4",
+    "pulledAt": "2026-10-27T12:01:34.276Z",
     "files": [
       ".swamp/pulled-extensions/@puddleworks/capture/files/LICENSE",
       ".swamp/pulled-extensions/@puddleworks/capture/files/README.md",
@@ -95,8 +95,8 @@
       ".swamp/pulled-extensions/@puddleworks/capture/models/capture_web.ts",
       ".swamp/pulled-extensions/@puddleworks/capture/workflows/workflow-capture-log-request.yaml"
     ],
-    "checksum": "fc39daab22da5e4d223fc21b31c821a3b8f45b4e9f09c45a3ce9ed3ef7451d70",
-    "filesChecksum": "a16bb408d650f53f5aa3feb0f33c4803869a5f179421ed3357310e739b77eceb",
+    "checksum": "408b9b0a873bd0eb91898b67a32dcfa8eae5fcf7dde1ca7a6d29ca9ef83bd822",
+    "filesChecksum": "32dc235c0a09a9ae3bd16bd92706d4e46a6654f5beab68f7f84882832ddfeee1",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
   }
