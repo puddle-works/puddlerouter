@@ -39,6 +39,8 @@
 # /commands, `!` shell turns, an `llm:` prefix, turns starting with `<`
 # (messages from the harness, such as background task reports), and turns
 # over 2,000 characters after trimming.
+# A `capture:` prefix is routed: `load` takes it off and the workflow logs
+# the turn in Capture without asking Jev.
 # These rules look at the typed text only: `<pasted_content>` blocks are left
 # out, so a turn that is only a paste is skipped and a long paste doesn't
 # count towards the limit. The turn file still holds the whole turn; `load`

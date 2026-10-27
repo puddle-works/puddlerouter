@@ -32,7 +32,9 @@ prompt ─▶ hooks/puddlerouter.sh
         ─▶ swamp workflow run @puddleworks/puddlerouter --input turnFile=<path>
              load   strip pasted and fenced blocks, cap, hash (sourceRef) → turn;
                     a turn that looks like it holds a secret is stored as a
-                    placeholder and never sent to Jev
+                    placeholder and never sent to Jev; a leading "capture:"
+                    is taken off and marks the turn for Capture (merged,
+                    route and decide are skipped)
              recall Jev's earlier route, decision and pick for this exact turn
                     (route cache, 7 days); route, decide and pick are skipped
                     for what it holds
@@ -42,11 +44,12 @@ prompt ─▶ hooks/puddlerouter.sh
              route  jev.choice over deterministic / decision / llm (cut-off 0.7)
              decide jev.noul, only for a decision turn with nothing pasted,
                     fenced or cut; yes at ≥ 0.8, no at ≤ 0.2, else unsure
-             match  deterministic turn: a built-in recipe, else search extensions
+             match  deterministic turn: a built-in recipe, else search extensions;
+                    capture: turn: the request draft, with no recipe or search
              pick   jev.choice over up to 3 allowlisted candidates, or none
              execute run the recipe through swamp (@swamp/git), read-only
-             raise  live mode, nothing can answer: one Capture request per turn
-                    (sourceRef) via @puddleworks/capture-log-request
+             raise  live mode, nothing can answer or a capture: turn: one Capture
+                    request per turn (sourceRef) via @puddleworks/capture-log-request
              reply  {action: block|hint|pass, text} → reply
 ```
 
@@ -235,6 +238,15 @@ instance's `appUrl`. If logging fails, the turn passes to Claude ("no request
 logged").
 Shadow mode never logs a request; `wouldAction` records that it would.
 
+To log a request yourself, start the turn with `capture:` (any case), for
+example `capture: a recipe that lists my open PRs across repos`. Jev, the
+merged check and the recipe search are skipped; the request's title is the
+turn's first 80 characters (without the prefix) and its description is the
+cleaned turn. The hook shows the link instead of running Claude. If logging
+fails, Claude gets a hint to tell you it was not logged and not to act on the
+turn. An empty `capture:` turn, or one that looks like it holds a secret, is
+not logged. Pasted blocks are left out of the request, as for every turn.
+
 `@webframp/github` is still used, read-only, by the `merged` step, and by the
 key check to raise its issue. It runs `gh` with your logged-in `gh auth` (no
 token in the vault) and is pulled by this repo only, not by the allowlist.
@@ -285,7 +297,9 @@ Hook settings (environment): `PUDDLEROUTER=off` skips every turn;
 `~/dev/puddlerouter`); `PUDDLEROUTER_TIMEOUT` seconds to wait for swamp
 (default 15); `PUDDLEROUTER_KEY_CHECK=off` skips the daily key check, whose day stamp
 is kept in `PUDDLEROUTER_STATE` (default `~/.local/state/puddlerouter`).
-Start a turn with `llm:` to skip the router for that turn.
+Start a turn with `llm:` to skip the router for that turn, or with `capture:`
+to log it straight in Capture without asking Jev (see
+[Capture requests](#capture-requests)).
 
 ## Read the shadow log
 

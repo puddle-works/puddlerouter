@@ -627,6 +627,14 @@ Capture is where the recipe backlog is agreed before it is built. See
 `capture` instance is `@puddleworks/capture/requests`, acting as Intake Bot, so
 there is no API key; the workflow's name and inputs are unchanged.
 
+**Changed on 2026-10-27 (later):** a turn that starts with `capture:` goes
+straight to Capture. `load` takes the prefix off and sets `capture`; `merged`,
+`route` and `decide` are skipped, `match` returns the request draft (title: the
+turn's first 80 characters) without a recipe or search, and `raise` logs it in
+live mode. The reply's route is `capture`: block with the link, or, if logging
+failed, a hint telling Claude not to act on the turn. The prefix is handled in
+`load`, not the hook, so the turn text still only travels as a file.
+
 ## Step 6: local config and a wider allowlist
 
 The allowlist is now `@swamp/*`, `@mesgme/*`, `@webframp/*` and `@puddleworks/*`,
