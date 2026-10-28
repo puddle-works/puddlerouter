@@ -263,15 +263,16 @@ queries that read the log.
 
 ### Publishing
 
-The extension is `@puddleworks/puddlerouter`, published privately. It started
+The extension is `@puddleworks/puddlerouter`, published publicly. It started
 as `@mesgme/puddlerouter`, but the `@mesgme` collective is on swamp's Free plan,
-which cannot publish privately; `@puddleworks` is on the Team plan. Renaming
+which cannot publish privately, and the first plan was a private release;
+`@puddleworks` is on the Team plan. Renaming
 keeps the model's id, so turns logged before the rename stay in the log under
 the workflow name `@mesgme/puddlerouter` until they expire. The README queries
 include both names.
 
-`make publish VISIBILITY=private DRY_RUN=1` passes the tests, `deno check`,
-formatting, quality (85%; the missing 15% is a verified public repository),
+`make publish VISIBILITY=public DRY_RUN=1` passes the tests, `deno check`,
+formatting, quality (the manifest names the public repository),
 the registry checks and the adversarial review in `swamp-extension-review/`.
 The router does not need publishing to run (the runtime repo is a clone of
 this one). CI's publish job reads `SWAMP_API_KEY` and `SWAMP_SIGNIN_TOKEN`

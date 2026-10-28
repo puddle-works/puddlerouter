@@ -336,5 +336,5 @@ the hook then reads the reply, which adds about 1.2 s.
 make test                                   # extension and hook tests
 make contracts-check
 make guardrails-check
-make publish VISIBILITY=private DRY_RUN=1   # stops after the dry run
+make publish VISIBILITY=public DRY_RUN=1    # stops after the dry run
 ```

@@ -64,15 +64,15 @@ typed turn to swamp, Jev or Claude. The plan and step 0 findings are in
   puddle-tooling. Every workflow in `workflows/` needs `maxReruns` and
   `maxWallClock` tags, and a workflow that reads another model's data with
   `data.latest` needs an entry in `contracts.ts`.
-- `make publish VISIBILITY=private DRY_RUN=1` runs the publish dry run. Never
+- `make publish VISIBILITY=public DRY_RUN=1` runs the publish dry run. Never
   push with `--yes`; `VISIBILITY` must equal `visibility:` in `manifest.yaml`.
 - Review reports live in `swamp-extension-review/` and are committed with the
   version they review.
 - The extension, its model type and its workflow are all
   `@puddleworks/puddlerouter` (`tests/workflows_test.ts` checks this). Workflow
   names must use the extension's collective (the publish quality gate checks
-  this), and `@puddleworks` because `@mesgme` is on swamp's Free plan, which
-  cannot publish privately.
+  this). It is `@puddleworks` because it was first published privately, which
+  `@mesgme` (on swamp's Free plan) cannot do.
 - **The hook runs in live mode** (the default since step 5, which the owner
   approved on 2026-10-26): it can block a turn or add a hint, and always
   shows the user what it did. `PUDDLEROUTER_MODE=shadow` still logs only.
