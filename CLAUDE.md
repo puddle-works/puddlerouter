@@ -71,8 +71,7 @@ typed turn to swamp, Jev or Claude. The plan and step 0 findings are in
 - The extension, its model type and its workflow are all
   `@puddleworks/puddlerouter` (`tests/workflows_test.ts` checks this). Workflow
   names must use the extension's collective (the publish quality gate checks
-  this). It is `@puddleworks` because it was first published privately, which
-  `@mesgme` (on swamp's Free plan) cannot do.
+  this).
 - **The hook runs in live mode** (the default since step 5, which the owner
   approved on 2026-10-26): it can block a turn or add a hint, and always
   shows the user what it did. `PUDDLEROUTER_MODE=shadow` still logs only.
