@@ -1,7 +1,7 @@
 {
   "@swamp/typesafe-ai": {
-    "version": "2026.09.15.1",
-    "pulledAt": "2026-10-13T08:43:50.875Z",
+    "version": "2026.10.23.1",
+    "pulledAt": "2026-10-28T16:23:20.657Z",
     "files": [
       ".swamp/pulled-extensions/@swamp/typesafe-ai/files/LICENSE.txt",
       ".swamp/pulled-extensions/@swamp/typesafe-ai/files/README.md",
@@ -9,34 +9,35 @@
       ".swamp/pulled-extensions/@swamp/typesafe-ai/models/_lib/client.ts",
       ".swamp/pulled-extensions/@swamp/typesafe-ai/models/typesafe_ai.ts"
     ],
-    "checksum": "a41f37b03a0f236182c4333e723248bfb464e65433d3eaa0a75be748d1855f87",
-    "filesChecksum": "1b4860e8ee4ea0b1412ead704eac76d59e67d77cddba72eaf5e165a91460668c",
+    "checksum": "9f4ac61ee22ed0f7138d8a05ed82a17fa6b9e0a13edeb62336191d5f84617296",
+    "filesChecksum": "98b2cf034446f386856ce3d27edd3cf2fdf5131aee8c7fb2bfab4ceff27d7baa",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
   },
   "@swamp/git": {
-    "version": "2026.09.28.1",
-    "pulledAt": "2026-10-13T11:01:57.159Z",
+    "version": "2026.10.23.1",
+    "pulledAt": "2026-10-28T16:23:21.810Z",
     "files": [
       ".swamp/pulled-extensions/@swamp/git/files/LICENSE.txt",
       ".swamp/pulled-extensions/@swamp/git/files/README.md",
       ".swamp/pulled-extensions/@swamp/git/manifest.yaml",
       ".swamp/pulled-extensions/@swamp/git/models/_lib/checks.ts",
       ".swamp/pulled-extensions/@swamp/git/models/_lib/operations.ts",
+      ".swamp/pulled-extensions/@swamp/git/models/_lib/paths.ts",
       ".swamp/pulled-extensions/@swamp/git/models/_lib/runner.ts",
       ".swamp/pulled-extensions/@swamp/git/models/_lib/schemas.ts",
       ".swamp/pulled-extensions/@swamp/git/models/_lib/tracing.ts",
       ".swamp/pulled-extensions/@swamp/git/models/_lib/types.ts",
       ".swamp/pulled-extensions/@swamp/git/models/git.ts"
     ],
-    "checksum": "d097c1d4a2f9de68022d399f4a167e966777cc02d80c17cd6a97ab80f8c5d15f",
-    "filesChecksum": "6a29c0663d490efcdc2d74a07962ee2b5b118bafab3cc135dde4b687b1b8fb5f",
+    "checksum": "fd44d5ec6409fc61f8e97d113274a62dcee4624c787eedcbbb436ea485e0b530",
+    "filesChecksum": "53ae4f9901996f0a9c8b3078c935929970ef01f76e80d835659f96ba019787ef",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
   },
   "@webframp/github": {
-    "version": "2026.10.12.1",
-    "pulledAt": "2026-10-13T11:22:53.851Z",
+    "version": "2026.10.14.1",
+    "pulledAt": "2026-10-28T16:23:22.564Z",
     "files": [
       ".swamp/pulled-extensions/@webframp/github/files/LICENSE.md",
       ".swamp/pulled-extensions/@webframp/github/files/README.md",
@@ -44,8 +45,8 @@
       ".swamp/pulled-extensions/@webframp/github/models/github/repos.ts",
       ".swamp/pulled-extensions/@webframp/github/models/github/triage.ts"
     ],
-    "checksum": "39f1e7a156b7fc3c0a5a8d2b641a1b37b232189684a59fd14cbce673107bddc2",
-    "filesChecksum": "d59f7eb74beaa3cf3616422ea810e1a8b4ace8550a8a1b6c7aaf8fce57fdb8d5",
+    "checksum": "7adeffc00639df8fb2aa6b7f98925178a07b1969298444c0d1210b6ed9a28ffc",
+    "filesChecksum": "49dfa8faf470684bfbd8019b52dfeef11e45cbae7f746b42ceaa8aa2dbc01edf",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
   },
@@ -64,8 +65,8 @@
     "publishedChannel": "stable"
   },
   "@puddleworks/capture": {
-    "version": "2026.10.28.1",
-    "pulledAt": "2026-10-28T11:26:09.385Z",
+    "version": "2026.10.28.2",
+    "pulledAt": "2026-10-28T16:23:23.739Z",
     "files": [
       ".swamp/pulled-extensions/@puddleworks/capture/files/LICENSE",
       ".swamp/pulled-extensions/@puddleworks/capture/files/README.md",
@@ -97,8 +98,8 @@
       ".swamp/pulled-extensions/@puddleworks/capture/workflows/workflow-capture-log-request.yaml",
       ".swamp/pulled-extensions/@puddleworks/capture/workflows/workflow-capture-review-spec.yaml"
     ],
-    "checksum": "d0eeded30e0ada8dc3781384c221c6a44175cfd95ffbd6cc2ada4399b67fe665",
-    "filesChecksum": "9aa7448ffc69a7be5fe8b034523d3ecae8594bb9023752ff7568d41788c2fe07",
+    "checksum": "0002d4b96bff733e1a0e63bb6f5ed5dec84eb53fa3722632dabfb59cb93cf7b0",
+    "filesChecksum": "b9e130bc78ac9c277950cce98a669b648543078e429c5831bf5a665c449988b4",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
   }
