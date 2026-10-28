@@ -64,8 +64,8 @@
     "publishedChannel": "stable"
   },
   "@puddleworks/capture": {
-    "version": "2026.10.27.4",
-    "pulledAt": "2026-10-27T12:01:34.276Z",
+    "version": "2026.10.28.1",
+    "pulledAt": "2026-10-28T11:26:09.385Z",
     "files": [
       ".swamp/pulled-extensions/@puddleworks/capture/files/LICENSE",
       ".swamp/pulled-extensions/@puddleworks/capture/files/README.md",
@@ -86,6 +86,7 @@
       ".swamp/pulled-extensions/@puddleworks/capture/models/_lib/domain/outcome_spec_v1.ts",
       ".swamp/pulled-extensions/@puddleworks/capture/models/_lib/domain/permissions.ts",
       ".swamp/pulled-extensions/@puddleworks/capture/models/_lib/domain/request.ts",
+      ".swamp/pulled-extensions/@puddleworks/capture/models/_lib/domain/review.ts",
       ".swamp/pulled-extensions/@puddleworks/capture/models/_lib/domain/specification.ts",
       ".swamp/pulled-extensions/@puddleworks/capture/models/_lib/web/assets.ts",
       ".swamp/pulled-extensions/@puddleworks/capture/models/_lib/web/serve.ts",
@@ -93,10 +94,11 @@
       ".swamp/pulled-extensions/@puddleworks/capture/models/_lib/web/source.ts",
       ".swamp/pulled-extensions/@puddleworks/capture/models/capture.ts",
       ".swamp/pulled-extensions/@puddleworks/capture/models/capture_web.ts",
-      ".swamp/pulled-extensions/@puddleworks/capture/workflows/workflow-capture-log-request.yaml"
+      ".swamp/pulled-extensions/@puddleworks/capture/workflows/workflow-capture-log-request.yaml",
+      ".swamp/pulled-extensions/@puddleworks/capture/workflows/workflow-capture-review-spec.yaml"
     ],
-    "checksum": "408b9b0a873bd0eb91898b67a32dcfa8eae5fcf7dde1ca7a6d29ca9ef83bd822",
-    "filesChecksum": "32dc235c0a09a9ae3bd16bd92706d4e46a6654f5beab68f7f84882832ddfeee1",
+    "checksum": "d0eeded30e0ada8dc3781384c221c6a44175cfd95ffbd6cc2ada4399b67fe665",
+    "filesChecksum": "9aa7448ffc69a7be5fe8b034523d3ecae8594bb9023752ff7568d41788c2fe07",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
   }
