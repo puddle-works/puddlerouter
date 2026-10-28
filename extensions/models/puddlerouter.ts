@@ -84,6 +84,8 @@ export const TurnSchema = z.object({
   complete: z.boolean(),
   /** True when the turn looked like it held a secret; `text` is a placeholder. */
   withheld: z.boolean(),
+  /** True when the turn started with `capture:`; `text` is without it. */
+  capture: z.boolean(),
   loadedAt: z.iso.datetime(),
 });
 /** The stored turn. */
@@ -97,6 +99,9 @@ export const MatchArgsSchema = z.object({
   ),
   repoDir: z.string().min(1).default(".").describe(
     "The runtime repo; its puddlerouter.yaml adds allowlist entries and recipes.",
+  ),
+  capture: z.boolean().optional().describe(
+    "The turn had a capture: prefix: skip recipes and search, draft the request as is.",
   ),
 });
 /** The arguments `match` accepts. */
@@ -210,6 +215,9 @@ export const ReplyArgsSchema = z.object({
     "shadow logs the route and always passes; live acts on it.",
   ),
   sourceRef: z.string().describe("The turn's sourceRef."),
+  capture: z.boolean().optional().describe(
+    "The turn had a capture: prefix, so it goes to Capture whatever Jev or the cache says.",
+  ),
   choice: z.string().optional().describe(
     "Jev's route; empty or missing when the route step did not answer.",
   ),
@@ -275,8 +283,8 @@ export const ReplySchema = z.object({
   /** The text live mode uses; in shadow mode the hook shows it to the user. */
   wouldText: z.string(),
   mode: z.enum(["shadow", "live"]),
-  /** The route taken after the cut-off. */
-  route: z.enum(ROUTES),
+  /** The route taken after the cut-off; capture for a capture: turn. */
+  route: z.enum([...ROUTES, "capture"]),
   /** Jev's own choice, before the cut-off; empty if it gave none. */
   choice: z.string(),
   confidence: z.number().nullable(),
@@ -499,13 +507,19 @@ export function looksSecret(text: string): boolean {
 export const WITHHELD_TEXT = "[withheld: looks like it contains a secret]";
 
 const ONLY_PLACEHOLDERS = /^(\[(pasted text|code block)\]\s*)*$/;
+const CAPTURE_PREFIX = /^\s*capture:\s*/i;
 
-/** The turn to store for `raw`: cleaned, hashed and stamped `now`. */
+/**
+ * The turn to store for `raw`: cleaned, hashed and stamped `now`. A leading
+ * `capture:` is taken off and marks the turn for Capture.
+ */
 export async function loadTurn(
-  raw: string,
+  text: string,
   maxChars: number,
   now: Date = new Date(),
 ): Promise<Turn> {
+  const capture = CAPTURE_PREFIX.test(text);
+  const raw = text.replace(CAPTURE_PREFIX, "");
   const withheld = looksSecret(raw);
   const cleaned = withheld
     ? { text: WITHHELD_TEXT, pasted: 0, fenced: 0, truncated: false }
@@ -517,6 +531,7 @@ export async function loadTurn(
     complete: !withheld && cleaned.pasted === 0 && cleaned.fenced === 0 &&
       !cleaned.truncated,
     withheld,
+    capture,
     loadedAt: now.toISOString(),
   };
 }
@@ -625,6 +640,36 @@ export function requestDraft(
     `Logged by puddlerouter (${sourceRef}).`,
   ].join("\n");
   return { title, description, key: sourceRef };
+}
+
+/**
+ * The match for a turn sent with a capture: prefix: no recipe or search, and
+ * the request is the turn as typed. Capture shows the description as plain
+ * text, so it has no Markdown.
+ */
+export function captureMatch(
+  text: string,
+  sourceRef: string,
+  now: Date = new Date(),
+): Match {
+  const description = [
+    text,
+    "",
+    "Sent to Capture with a capture: prefix.",
+    `Logged by puddlerouter (${sourceRef}).`,
+  ].join("\n");
+  return {
+    kind: "none",
+    recipeId: "",
+    captures: [],
+    query: "",
+    candidates: [],
+    criteria: criteriaFor([]),
+    requestTitle: text.replace(/\s+/g, " ").trim().slice(0, 80),
+    requestDescription: description,
+    requestKey: sourceRef,
+    matchedAt: now.toISOString(),
+  };
 }
 
 async function searchJson(exec: Exec, args: string[]): Promise<unknown> {
@@ -870,13 +915,24 @@ export function recipeText(recipeId: string, answer: string): string {
     "Claude. To ask Claude instead, send the prompt again starting with llm:";
 }
 
-/** The text shown when no extension could answer and a request was logged. */
-export function requestText(url: string): string {
-  return "No swamp recipe or extension can answer this yet. Logged a request " +
+/**
+ * The text shown when a request was logged: because no extension could
+ * answer the turn, or (`unanswered` false) because it had a capture: prefix.
+ */
+export function requestText(url: string, unanswered = true): string {
+  return (unanswered
+    ? "No swamp recipe or extension can answer this yet. Logged a request "
+    : "Logged a request ") +
     `in Capture: ${url}\n\n` +
     "Answered by puddlerouter without Claude. To ask Claude instead, send " +
     "the prompt again starting with llm:";
 }
+
+/** The context added when a capture: turn could not be logged. */
+export const CAPTURE_FAILED_HINT =
+  "puddlerouter: the user started this turn with capture:, which asks for it " +
+  "to be logged as a request in Capture rather than done now, but it was not " +
+  "logged. Tell the user it was not logged and do not act on it.";
 
 /** The context added when search found an extension but no recipe covers it. */
 export function extensionHint(name: string): string {
@@ -909,7 +965,10 @@ export function buildReply(
 ): Reply {
   const choice = args.choice ?? "";
   const merged = args.mergedMatched === true;
-  const route = merged
+  const capture = args.capture === true;
+  const route: Reply["route"] = capture
+    ? "capture"
+    : merged
     ? "deterministic"
     : effectiveRoute(choice, args.confidence, args.cutoff);
   const complete = args.complete ?? false;
@@ -922,7 +981,21 @@ export function buildReply(
   let extension = "";
   let request = "";
   let reason: string;
-  if (merged) {
+  if (capture) {
+    if (args.mode === "shadow") {
+      wouldAction = "block";
+      reason = "capture: prefix, would log a request";
+    } else if (args.requestUrl) {
+      wouldAction = "block";
+      request = args.requestUrl;
+      text = requestText(args.requestUrl, false);
+      reason = "capture: prefix, request logged";
+    } else {
+      wouldAction = "hint";
+      text = CAPTURE_FAILED_HINT;
+      reason = "capture: prefix, no request logged";
+    }
+  } else if (merged) {
     // Claude still does the clean-up, so the steps go in as context.
     recipe = "merged";
     if (args.mergedOk && args.mergedText) {
@@ -1129,6 +1202,12 @@ export const model = {
       arguments: MatchArgsSchema,
       execute: async (args: MatchArgs, context: MethodContext) => {
         context.logger.info("Matching turn", {});
+        if (args.capture) {
+          const match = captureMatch(args.text, args.sourceRef ?? "");
+          const handle = await context.writeResource("match", "match", match);
+          context.logger.info("Matched capture: turn", {});
+          return { dataHandles: [handle] };
+        }
         const store = resourceStore(context);
         const local = await loadConfig(args.repoDir);
         if (local.errors.length) {

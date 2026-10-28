@@ -401,3 +401,33 @@ Deno.test("every manifest dependency is pinned in upstream_extensions.json", asy
     assert(lock[dep]?.version, `upstream_extensions.json lacks ${dep}`);
   }
 });
+
+const CAPTURE = "steps.load.outputs.capture";
+
+Deno.test("a capture: turn skips Jev and the merged check", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  for (const name of ["merged", "route", "decide"]) {
+    const step = await stepOf(wf, name);
+    assert((step.guard ?? "").includes(CAPTURE), `${name} guard lacks capture`);
+  }
+});
+
+Deno.test("match runs for a capture: turn that is not empty or withheld, and is told so", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "match");
+  const guard = step.guard ?? "";
+  for (
+    const part of [
+      CAPTURE,
+      "steps.load.outputs.empty",
+      "steps.load.outputs.withheld",
+    ]
+  ) assert(guard.includes(part), `match guard lacks ${part}`);
+  const inputs = step.task.inputs as Record<string, string>;
+  assert(inputs.capture?.includes(CAPTURE));
+});
+
+Deno.test("reply knows the turn had a capture: prefix", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "reply");
+  const inputs = step.task.inputs as Record<string, string>;
+  assert(inputs.capture?.includes(CAPTURE));
+});

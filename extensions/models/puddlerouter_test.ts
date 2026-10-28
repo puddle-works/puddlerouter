@@ -12,6 +12,7 @@ import {
 import { parseConfig } from "./_lib/config.ts";
 import {
   buildReply,
+  captureMatch,
   cleanTurn,
   decisionAnswer,
   effectiveRoute,
@@ -1515,4 +1516,109 @@ Deno.test("merged without runModel stores a failed check", async () => {
   assertEquals(written[0].data.matched, true);
   assertEquals(written[0].data.ok, false);
   assertMatch(written[0].data.error as string, /runModel/);
+});
+
+// ---- capture: prefix ----
+
+Deno.test("loadTurn strips a capture: prefix, in any case, and marks the turn", async () => {
+  const turn = await loadTurn("  Capture:  add a weather recipe\n", 2000);
+  assertEquals(turn.capture, true);
+  assertEquals(turn.text, "add a weather recipe");
+  assertEquals(turn.sourceRef, await sourceRef("add a weather recipe"));
+  assertEquals(turn.complete, true);
+  assertEquals((await loadTurn("capture:", 2000)).empty, true);
+  for (const text of ["add a weather recipe", "captured: x", "a capture: x"]) {
+    assertEquals((await loadTurn(text, 2000)).capture, false, text);
+  }
+});
+
+Deno.test("loadTurn withholds a secret capture: turn but still marks it", async () => {
+  const turn = await loadTurn(
+    "capture: password=hunter2 is that strong?",
+    2000,
+  );
+  assertEquals(turn.capture, true);
+  assertEquals(turn.withheld, true);
+});
+
+Deno.test("captureMatch drafts the request from the turn without searching", () => {
+  const m = captureMatch(
+    "add a weather recipe\nfor Utrecht " + "x".repeat(200),
+    "puddlerouter:0123456789abcdef",
+    new Date("2026-10-27T10:00:00Z"),
+  );
+  assertEquals(m.kind, "none");
+  assertEquals(m.candidates, []);
+  assertEquals(m.query, "");
+  assert(m.requestTitle.startsWith("add a weather recipe for Utrecht"));
+  assert(m.requestTitle.length <= 80, `${m.requestTitle.length}`);
+  assert(!m.requestTitle.includes("\n"));
+  assert(m.requestDescription.startsWith("add a weather recipe\nfor Utrecht"));
+  assertMatch(m.requestDescription, /capture: prefix/);
+  assertMatch(m.requestDescription, /puddlerouter:0123456789abcdef/);
+  assertEquals(m.requestKey, "puddlerouter:0123456789abcdef");
+  assertEquals(m.matchedAt, "2026-10-27T10:00:00.000Z");
+});
+
+Deno.test("match for a capture: turn searches nothing and writes the draft", async () => {
+  const w: Written[] = [];
+  await model.methods.match.execute(
+    {
+      text: "git status",
+      sourceRef: "puddlerouter:0123456789abcdef",
+      repoDir: "/nonexistent",
+      capture: true,
+    },
+    fakeContext(w),
+  );
+  assertEquals(w.length, 1);
+  assertEquals(w[0].data.kind, "none");
+  assertEquals(w[0].data.recipeId, "");
+  assertEquals(w[0].data.requestTitle, "git status");
+});
+
+const CAPTURED = {
+  mode: "live" as const,
+  sourceRef: "puddlerouter:0123456789abcdef",
+  cutoff: 0.7,
+  capture: true,
+  // What the cache or a stray step might hold; a capture: turn ignores it.
+  choice: "decision",
+  confidence: 0.95,
+  yes: 0.99,
+  complete: true,
+};
+
+Deno.test("buildReply blocks a capture: turn with the request link", () => {
+  const r = buildReply({
+    ...CAPTURED,
+    matchKind: "none",
+    requestUrl: "http://127.0.0.1:3002/requests/req_9",
+  });
+  assertEquals(r.action, "block");
+  assertEquals(r.route, "capture");
+  assertEquals(r.answer, null);
+  assertEquals(r.request, "http://127.0.0.1:3002/requests/req_9");
+  assertMatch(
+    r.text,
+    /Logged a request in Capture: http:\/\/127\.0\.0\.1:3002\/requests\/req_9/,
+  );
+  assertMatch(r.text, /starting with llm:/);
+  assertEquals(r.reason, "capture: prefix, request logged");
+});
+
+Deno.test("buildReply tells Claude not to act on a capture: turn it could not log", () => {
+  const r = buildReply({ ...CAPTURED, requestUrl: "" });
+  assertEquals(r.action, "hint");
+  assertEquals(r.route, "capture");
+  assertMatch(r.text, /not logged/);
+  assertMatch(r.text, /do not act on it/);
+  assertEquals(r.reason, "capture: prefix, no request logged");
+});
+
+Deno.test("buildReply in shadow mode records that live would log the capture: turn", () => {
+  const r = buildReply({ ...CAPTURED, mode: "shadow" });
+  assertEquals(r.action, "pass");
+  assertEquals(r.wouldAction, "block");
+  assertEquals(r.reason, "shadow: capture: prefix, would log a request");
 });
