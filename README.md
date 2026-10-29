@@ -227,12 +227,14 @@ recipe backlog: they are discussed and agreed in Capture, then built. The
 `raise` step runs `@puddleworks/capture-log-request` from the swamp extension
 [`@puddleworks/capture`](https://github.com/puddle-works/puddleworks-capture),
 which passes the turn's `sourceRef` as the idempotency key, so sending the same
-turn again gives the same request. Capture's people and requests are this
-repo's swamp data, in the `capture` instance
-(`models/@puddleworks/capture/requests/`), which acts as Intake Bot
-(`intake-bot@example.com`, its `defaultAs`). There is no key. To read them,
-run `swamp behavior run viewer serve --input port=3002` and open
-http://127.0.0.1:3002. The link is `captureUrl` (default
+turn again gives the same request. The request is logged in the repo the hook
+runs puddlerouter in (`PUDDLEROUTER_REPO`), not necessarily this one: Capture's
+people and requests are that repo's swamp data, in its `capture` instance,
+which acts as Intake Bot (`intake-bot@example.com`, its `defaultAs`). That repo
+can be a separate desk that holds only released extensions (see
+[Run in a separate desk](#run-in-a-separate-desk)). There is no key. To read
+them, run `swamp behavior run viewer serve --input port=3002` in that repo and
+open http://127.0.0.1:3002. The link is `captureUrl` (default
 `http://127.0.0.1:3002`) plus `/requests/<id>`; keep it the same as the
 instance's `appUrl`. If logging fails, the turn passes to Claude ("no request
 logged").
@@ -293,13 +295,67 @@ Then add the hook to `~/.claude/settings.json` under `hooks.UserPromptSubmit`:
 ```
 
 Hook settings (environment): `PUDDLEROUTER=off` skips every turn;
-`PUDDLEROUTER_MODE=live|shadow` (default `live`); `PUDDLEROUTER_REPO` (default
+`PUDDLEROUTER_MODE=live|shadow` (default `live`); `PUDDLEROUTER_REPO`, the swamp
+repo puddlerouter runs in and logs Capture requests in (default
 `~/dev/puddlerouter`); `PUDDLEROUTER_TIMEOUT` seconds to wait for swamp
 (default 15); `PUDDLEROUTER_KEY_CHECK=off` skips the daily key check, whose day stamp
 is kept in `PUDDLEROUTER_STATE` (default `~/.local/state/puddlerouter`).
 Start a turn with `llm:` to skip the router for that turn, or with `capture:`
 to log it straight in Capture without asking Jev (see
 [Capture requests](#capture-requests)).
+
+### Run in a separate desk
+
+puddlerouter can run in a swamp repo of its own, such as a desk that only runs
+Capture, using the released extensions from the registry and no local sources.
+Its turns and Capture requests are then that repo's data. The hook script is
+not in the extension, so keep this clone for `hooks/puddlerouter.sh`.
+
+```sh
+mkdir ~/dev/puddleworks-desk && cd ~/dev/puddleworks-desk
+swamp repo init .
+swamp extension pull @puddleworks/puddlerouter   # also pulls @puddleworks/capture, @swamp/git, @webframp/github
+swamp extension pull @swamp/typesafe-ai          # Jev
+swamp vault create local_encryption typesafe
+swamp vault put typesafe TYPESAFE_API_KEY        # the Jev key (prompts)
+
+swamp behavior create @puddleworks/puddlerouter puddlerouter
+swamp behavior create @swamp/typesafe-ai jev \
+  --global-arg 'apiKey=${{ vault.get("typesafe", "TYPESAFE_API_KEY") }}' \
+  --global-arg baseUrl=https://opencode.ai/zen --global-arg model=jev-1.13
+swamp behavior create @swamp/git git
+swamp behavior create @webframp/github github
+swamp behavior create @puddleworks/capture/requests capture \
+  --global-arg appUrl=http://127.0.0.1:3002 \
+  --global-arg defaultAs=intake-bot@example.com
+swamp behavior create @puddleworks/capture/web viewer
+swamp behavior run capture add_person \
+  --input email=intake-bot@example.com --input 'name=Intake Bot'
+
+cp ~/dev/puddlerouter/puddlerouter.example.yaml puddlerouter.yaml
+echo /puddlerouter.yaml >> .gitignore
+```
+
+To bring over requests already logged in another repo, run
+`swamp behavior run capture export_snapshot --input path=capture-snapshot.json`
+there, copy the file into the desk and run
+`swamp behavior run capture import --input path=capture-snapshot.json`. Import
+adds the people too, so `add_person` is then not needed, and it only adds what
+is missing, so it is safe to run again. The file holds people's emails: delete
+it afterwards.
+
+Then point the hook at the desk, keeping the script path:
+
+```json
+"command": "PUDDLEROUTER_REPO=\"$HOME/dev/puddleworks-desk\" bash \"$HOME/dev/puddlerouter/hooks/puddlerouter.sh\""
+```
+
+To check it, send a turn starting with `capture:`. It skips Jev, so it shows
+whether logging works on its own: the reply is "Logged a request in Capture:
+http://127.0.0.1:3002/requests/…". With the desk's
+`swamp behavior run viewer serve --input port=3002` running, the link opens
+the request. "… but it was not logged" usually means Intake Bot is not in the
+people list (`add_person` above).
 
 ## Read the shadow log
 
