@@ -27,7 +27,8 @@
 #   PUDDLEROUTER_TIMEOUT     seconds to wait for swamp (default 15)
 #   PUDDLEROUTER_SWAMP       swamp binary (default swamp; tests use a fake)
 #   PUDDLEROUTER_KEY_CHECK=off  skip the daily key check
-#   PUDDLEROUTER_STATE       where the key check's day stamp is kept
+#   PUDDLEROUTER_RECIPES_SYNC=off  skip the daily recipes sync
+#   PUDDLEROUTER_STATE       where the day stamps are kept
 #                            (default ~/.local/state/puddlerouter)
 #
 # Key check: the first turn of each day, skipped or not, also starts the
@@ -35,7 +36,19 @@
 # an issue when Jev's key stops working, which this hook would otherwise
 # hide by failing open.
 #
-# Not routed (swamp is called for the key check only): empty turns,
+# Recipes sync: the first turn of each day, skipped or not, also starts the
+# `@puddleworks/recipes-sync` workflow in the background, which gathers the
+# recipes of the installed packs. It starts as the hook exits, because the
+# turn's own workflow needs the same lock. A failed sync waits for the next day.
+#
+# Session: the session id goes to the workflow as `sessionId` when it has a safe
+# shape (swamp reads a value starting with `@` as a file). A recipe that makes
+# changes keeps its plan under it, and only the session's very next turn can
+# confirm it. So in live mode a skipped typed turn drops any plan, in the
+# background; `!` turns, messages from the harness and empty turns are not
+# replies and leave it alone.
+#
+# Not routed (swamp is called for the daily jobs and to drop a plan): empty turns,
 # /commands, `!` shell turns, an `llm:` prefix, turns starting with `<`
 # (messages from the harness, such as background task reports), and turns
 # over 2,000 characters after trimming.
@@ -74,34 +87,65 @@ note() {
     systemMessage: $note}'
 }
 
-if [ "${PUDDLEROUTER_KEY_CHECK:-on}" != off ]; then
-  state="${PUDDLEROUTER_STATE:-$HOME/.local/state/puddlerouter}"
-  stamp="$state/key-check-day"
+# True the first time it is called each day for this stamp name.
+first_today() {
+  local state="${PUDDLEROUTER_STATE:-$HOME/.local/state/puddlerouter}"
+  local today
   today=$(date +%F)
-  if [ "$(cat "$stamp" 2>/dev/null)" != "$today" ] &&
-    mkdir -p "$state" && printf '%s\n' "$today" > "$stamp"; then
-    "$SWAMP" workflow run @puddleworks/puddlerouter-key-check \
-      --repo-dir "$REPO" </dev/null >/dev/null 2>&1 &
-  fi
+  [ "$(cat "$state/$1" 2>/dev/null)" != "$today" ] &&
+    mkdir -p "$state" && printf '%s\n' "$today" > "$state/$1"
+}
+
+if [ "${PUDDLEROUTER_KEY_CHECK:-on}" != off ] && first_today key-check-day; then
+  "$SWAMP" workflow run @puddleworks/puddlerouter-key-check \
+    --repo-dir "$REPO" </dev/null >/dev/null 2>&1 &
 fi
 
+sync_due=
+if [ "${PUDDLEROUTER_RECIPES_SYNC:-on}" != off ] &&
+  first_today recipes-sync-day; then
+  sync_due=1
+fi
+
+turn= out=
+# Starts the daily sync last: it holds the lock the turn's workflow needs.
+on_exit() {
+  rm -f "$turn" "$out"
+  if [ -n "$sync_due" ]; then
+    "$SWAMP" workflow run @puddleworks/recipes-sync --repo-dir "$REPO" \
+      --input "repoDir=$REPO" </dev/null >/dev/null 2>&1 &
+  fi
+}
+trap on_exit EXIT
+
 # {prompt} to route, {skip: why} for a skipped typed turn, or {} for a turn
-# that is skipped without a note.
+# that is skipped without a note. {session} is empty unless it has a safe shape.
 parsed=$(jq -c --argjson max "$MAX_CHARS" '
   def trim: gsub("^\\s+|\\s+$"; "");
-  (.prompt // "") | trim as $p
+  (.session_id | if type == "string" and test("^[A-Za-z0-9_-]{1,128}$")
+    then . else "" end) as $session
+  | (.prompt // "") | trim as $p
   | $p
   | gsub("<pasted_content id=\"[^\"]*\">[\\s\\S]*?(</pasted_content id=\"[^\"]*\">|\\z)"; "")
   | trim as $typed
   | if $p == "" or ($typed | test("^(!|<)")) then {}
-    elif $typed == "" then {skip: "only a paste"}
-    elif ($typed | test("^/")) then {skip: "a /command"}
-    elif ($typed | test("^llm:"; "i")) then {skip: "an llm: prefix"}
-    elif ($typed | length) > $max then {skip: "over 2,000 characters"}
-    else {prompt: $p} end
+    elif $typed == "" then {skip: "only a paste", session: $session}
+    elif ($typed | test("^/")) then {skip: "a /command", session: $session}
+    elif ($typed | test("^llm:"; "i")) then
+      {skip: "an llm: prefix", session: $session}
+    elif ($typed | length) > $max then
+      {skip: "over 2,000 characters", session: $session}
+    else {prompt: $p, session: $session} end
 ') || exit 0
 skip=$(jq -r '.skip // empty' <<<"$parsed") || exit 0
+session=$(jq -r '.session // empty' <<<"$parsed") || exit 0
 if [ -n "$skip" ]; then
+  # This turn is not a yes, so a plan the last turn showed is dropped.
+  if [ "$MODE" = live ] && [ -n "$session" ]; then
+    "$SWAMP" behavior run recipes confirm --repo-dir "$REPO" \
+      --input "sessionId=$session" --input "text=[skipped]" \
+      --input "repoDir=$REPO" </dev/null >/dev/null 2>&1 &
+  fi
   note "puddlerouter: not routed ($skip)"
   exit 0
 fi
@@ -111,16 +155,16 @@ prompt=$(jq -r '.prompt // empty' <<<"$parsed") || exit 0
 turn=$(mktemp "${TMPDIR:-/tmp}/puddlerouter-turn.XXXXXX") || exit 0
 case "$turn" in
   /*) ;;
-  *) rm -f "$turn"; exit 0 ;;
+  *) exit 0 ;;
 esac
-printf '%s' "$prompt" > "$turn" || { rm -f "$turn"; exit 0; }
+printf '%s' "$prompt" > "$turn" || exit 0
 
 run_args=(workflow run @puddleworks/puddlerouter --repo-dir "$REPO"
   --input "turnFile=$turn" --input "mode=$MODE"
   --input "hookStartedAt=$started" --input "repoDir=$REPO")
+[ -n "$session" ] && run_args+=(--input "sessionId=$session")
 
-out=$(mktemp "${TMPDIR:-/tmp}/puddlerouter-run.XXXXXX") || { rm -f "$turn"; exit 0; }
-trap 'rm -f "$turn" "$out"' EXIT
+out=$(mktemp "${TMPDIR:-/tmp}/puddlerouter-run.XXXXXX") || exit 0
 deadline=$((SECONDS + LIMIT))
 
 # Runs swamp with its output in $out; gives up at the deadline.

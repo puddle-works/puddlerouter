@@ -6,9 +6,15 @@
 allow:
   - "@webframp/*"
 
-# Local recipes run before the built-in ones. Read-only methods only; the
-# turn must match `pattern` in full, and each captured piece must have the
-# declared shape (int, repo or word) before it becomes a method input.
+# Methods you know only read, so their recipes answer at once: "extension method".
+# Any other method asks first and shows its plan, because the router cannot tell
+# what it changes. A pack cannot set this: only this file can.
+reads:
+  - "@webframp/github list_prs"
+
+# Your own recipes, tried before those from packs. The turn must match `pattern`
+# in full, and each captured piece must have the declared shape (int, repo or
+# word) before it becomes a method input. @puddleworks/recipes reads these.
 recipes:
   - id: github-open-prs
     extension: "@webframp/github"
@@ -17,7 +23,6 @@ recipes:
     # {repo} and {state} are inputs; "/" becomes "-" (the data is prs-owner-repo-open).
     dataName: "prs-{repo}-{state}"
     pattern: '^(?:list |show )?open (?:prs|pull requests) (?:in|for) ([\w.-]+/[\w.-]+)[?.!]?$'
-    readOnly: true
     inputs:
       repo: { capture: 1, as: repo }
     fixed:

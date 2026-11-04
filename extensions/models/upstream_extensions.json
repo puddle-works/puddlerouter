@@ -102,5 +102,26 @@
     "filesChecksum": "b9e130bc78ac9c277950cce98a669b648543078e429c5831bf5a665c449988b4",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
+  },
+  "@puddleworks/recipes": {
+    "version": "2026.11.04.1",
+    "pulledAt": "2026-11-04T16:06:30.300Z",
+    "files": [
+      ".swamp/pulled-extensions/@puddleworks/recipes/files/LICENSE",
+      ".swamp/pulled-extensions/@puddleworks/recipes/files/README.md",
+      ".swamp/pulled-extensions/@puddleworks/recipes/manifest.yaml",
+      ".swamp/pulled-extensions/@puddleworks/recipes/models/_lib/allowlist.ts",
+      ".swamp/pulled-extensions/@puddleworks/recipes/models/_lib/config.ts",
+      ".swamp/pulled-extensions/@puddleworks/recipes/models/_lib/effects.ts",
+      ".swamp/pulled-extensions/@puddleworks/recipes/models/_lib/packs.ts",
+      ".swamp/pulled-extensions/@puddleworks/recipes/models/_lib/recipes.ts",
+      ".swamp/pulled-extensions/@puddleworks/recipes/models/recipes.ts",
+      ".swamp/pulled-extensions/@puddleworks/recipes/workflows/workflow-recipes-sync.yaml"
+    ],
+    "checksum": "06650d4d4106203e67cda4ae11a9ca3076f923d6950b40a05dd3b4fce34743e3",
+    "filesChecksum": "56f4536dd0ac73ed975bd4616308098c6b50faff1bd0968186b356e8b742ab81",
+    "serverUrl": "https://swamp-club.com",
+    "channel": "beta",
+    "publishedChannel": "beta"
   }
 }

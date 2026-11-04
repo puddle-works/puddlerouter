@@ -1,5 +1,5 @@
 /**
- * The extensions that may be pulled and run without asking.
+ * The extensions a search may offer Jev to pick from.
  *
  * An entry is `@scope/*` (any extension in the scope, nested names included)
  * or an exact `@scope/name`. The defaults are the scopes the owner trusts;
@@ -35,6 +35,3 @@ export function allowPredicate(list: string[]): (extension: string) => boolean {
     );
   };
 }
-
-/** True if the extension is on the default list. */
-export const isAllowed = allowPredicate(DEFAULT_ALLOWLIST);

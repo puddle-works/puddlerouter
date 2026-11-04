@@ -1,181 +1,31 @@
 /**
- * The local `puddlerouter.yaml`: extra allowlist entries and the owner's own
- * recipes, for ones not published as a pack.
+ * The `allow:` list in the local `puddlerouter.yaml`: extra extensions a search
+ * may offer, on top of the defaults.
  *
  * ```yaml
  * allow: ['@acme/*']
- * recipes:
- *   - id: gh-open-prs
- *     extension: '@webframp/github'
- *     method: list_prs
- *     definition: github
- *     dataName: prs
- *     pattern: '^list the open prs in ([\w.-]+/[\w.-]+)$'
- *     inputs: { repo: { capture: 1, as: repo } }
- *     fixed: { state: open }
- *     each: { path: items, line: '#{number} {title}' }
- *     template: "{count} open:\n{lines}"
- *     empty: No open pull requests.
- *     cacheFor: 5m   # optional: reuse a successful answer for 5 minutes
  * ```
  *
- * A bad entry is reported in `errors` and dropped; the rest still load. Local
- * recipes are always read-only. A capture only reaches swamp if it has the
- * declared shape (`int`, `repo` or `word`).
+ * The same file holds `recipes:` and `reads:`, which `@puddleworks/recipes`
+ * reads; this reader leaves them alone. A bad entry is reported in `errors` and
+ * dropped; the rest still load.
  *
  * @module
  */
 import { parse } from "jsr:@std/yaml@1.3.0";
-import { z } from "npm:zod@4";
 import { allowPredicate, DEFAULT_ALLOWLIST, isEntry } from "./allowlist.ts";
-import { type Recipe, RECIPES } from "./recipes.ts";
 
 export { allowPredicate, DEFAULT_ALLOWLIST };
 
-const SHAPES = {
-  int: /^\d{1,6}$/,
-  repo: /^[\w.-]+\/[\w.-]+$/,
-  word: /^[\w.-]{1,64}$/,
-} as const;
-
-const LocalRecipe = z.object({
-  id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
-  extension: z.string(),
-  method: z.string().regex(/^[A-Za-z_][\w]*$/),
-  definition: z.string().regex(/^[\w.-]+$/),
-  dataName: z.string().min(1),
-  pattern: z.string().min(1),
-  readOnly: z.literal(true).default(true),
-  inputs: z.record(
-    z.string().regex(/^[A-Za-z_]\w*$/),
-    z.object({
-      capture: z.number().int().min(1).max(9),
-      as: z.enum(["int", "repo", "word"]),
-    }),
-  ).default({}),
-  fixed: z.record(z.string(), z.string()).default({}),
-  each: z.object({ path: z.string(), line: z.string() }).optional(),
-  template: z.string().min(1),
-  empty: z.string().optional(),
-  cacheFor: z.string().regex(/^\d+[smh]$/).optional(),
-}).strict();
-type LocalRecipe = z.infer<typeof LocalRecipe>;
-
-/** What the file gives. */
+/** What the router takes from the file. */
 export interface Config {
-  /** Defaults plus the file's `allow` entries. */
   allowlist: string[];
-  /** Compiled local recipes, in file order. */
-  recipes: Recipe[];
-  /** One message per entry dropped. */
   errors: string[];
 }
 
-function pick(value: unknown, path: string): unknown {
-  let v = value;
-  for (const key of path.split(".")) {
-    if (typeof v !== "object" || v === null) return undefined;
-    v = (v as Record<string, unknown>)[key];
-  }
-  return v;
-}
-
-function fill(template: string, data: unknown): string {
-  return template.replace(/\{([\w.]+)\}/g, (_whole, path) => {
-    const v = pick(data, path);
-    return v === undefined || v === null ? "" : String(v);
-  });
-}
-
-const UNIT_MS = { s: 1000, m: 60_000, h: 3_600_000 } as const;
-
-function durationMs(text: string): number {
-  return Number(text.slice(0, -1)) *
-    UNIT_MS[text.slice(-1) as keyof typeof UNIT_MS];
-}
-
-function compile(r: LocalRecipe): Recipe {
-  const pattern = new RegExp(r.pattern, "i");
-  const build = (captures: string[]): Record<string, string> => {
-    const out: Record<string, string> = { ...r.fixed };
-    for (const [name, { capture, as }] of Object.entries(r.inputs)) {
-      const value = captures[capture - 1] ?? "";
-      if (!SHAPES[as].test(value)) throw new Error(`${name} is not a ${as}`);
-      out[name] = value;
-    }
-    return out;
-  };
-  return {
-    id: r.id,
-    extension: r.extension,
-    method: r.method,
-    definition: r.definition,
-    dataName: r.dataName,
-    dataNameFor: (captures) => {
-      const inputs = build(captures);
-      return r.dataName.replace(
-        /\{(\w+)\}/g,
-        (_, k) => (inputs[k] ?? "").replace(/[^\w.-]+/g, "-"),
-      );
-    },
-    pattern,
-    readOnly: true,
-    cacheFor: r.cacheFor ? durationMs(r.cacheFor) : undefined,
-    inputs: build,
-    render: (attrs) => {
-      let lines = "";
-      let count = 0;
-      if (r.each) {
-        const items = pick(attrs, r.each.path);
-        const list = Array.isArray(items) ? items : [];
-        count = list.length;
-        if (count === 0 && r.empty !== undefined) return r.empty;
-        lines = list.slice(0, 20).map((item) => fill(r.each!.line, item))
-          .concat(count > 20 ? [`… and ${count - 20} more`] : []).join("\n");
-      }
-      return fill(r.template, { ...attrs, count, lines });
-    },
-  };
-}
-
-/**
- * Check and compile one raw recipe (from the local file or a pack). On success
- * its id is added to `taken`, so a later recipe with the same id is refused.
- */
-export function parseRecipe(
-  raw: unknown,
-  allowed: (extension: string) => boolean,
-  taken: Set<string>,
-): { recipe: Recipe } | { error: string } {
-  const id = (raw as { id?: unknown })?.id;
-  const parsed = LocalRecipe.safeParse(raw);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const where = issue?.path.length ? `${issue.path.join(".")}: ` : "";
-    return { error: `recipe ${id}: ${where}${issue?.message}` };
-  }
-  const r = parsed.data;
-  if (taken.has(r.id)) return { error: `recipe ${r.id}: id already used` };
-  if (!allowed(r.extension)) {
-    return { error: `recipe ${r.id}: ${r.extension} is not allowed` };
-  }
-  let recipe: Recipe;
-  try {
-    recipe = compile(r);
-  } catch (e) {
-    return { error: `recipe ${r.id}: bad pattern (${(e as Error).message})` };
-  }
-  taken.add(r.id);
-  return { recipe };
-}
-
-/** Parse the file's text. Never throws. */
+/** Parse the file's text; never throws. */
 export function parseConfig(text: string): Config {
-  const config: Config = {
-    allowlist: [...DEFAULT_ALLOWLIST],
-    recipes: [],
-    errors: [],
-  };
+  const config: Config = { allowlist: [...DEFAULT_ALLOWLIST], errors: [] };
   let doc: unknown;
   try {
     doc = parse(text);
@@ -188,18 +38,11 @@ export function parseConfig(text: string): Config {
     config.errors.push("the file must be a mapping");
     return config;
   }
-  const { allow, recipes } = doc as Record<string, unknown>;
+  const { allow } = doc as Record<string, unknown>;
   for (const entry of Array.isArray(allow) ? allow : []) {
     if (typeof entry === "string" && isEntry(entry)) {
       if (!config.allowlist.includes(entry)) config.allowlist.push(entry);
     } else config.errors.push(`allow: ignored ${JSON.stringify(entry)}`);
-  }
-  const allowed = allowPredicate(config.allowlist);
-  const taken = new Set(RECIPES.map((r) => r.id));
-  for (const raw of Array.isArray(recipes) ? recipes : []) {
-    const parsed = parseRecipe(raw, allowed, taken);
-    if ("error" in parsed) config.errors.push(parsed.error);
-    else config.recipes.push(parsed.recipe);
   }
   return config;
 }

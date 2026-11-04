@@ -14,6 +14,7 @@
 - [A note on every turn](#a-note-on-every-turn)
 - [Write recipes: the gate (issue #27)](#write-recipes-the-gate-issue-27)
 - [Where write recipes go](#where-write-recipes-go)
+- [Recipes move out (issue #49)](#recipes-move-out-issue-49)
 
 ## Step 0: checks
 
@@ -699,6 +700,9 @@ here) was not run with real Jev.
 
 ## Step 6c: recipe packs, `recipeIndex` and the sync workflow
 
+This code and workflow have moved to `@puddleworks/recipes`. See
+[Recipes move out](#recipes-move-out-issue-49).
+
 The first pack is `@puddleworks/puddlerouter-recipes-github` (repo
 `puddle-works/puddlerouter-recipes-github`, private, label `puddlerouter-recipe`),
 one workflow per recipe. See the README, "Recipe packs", for the format.
@@ -972,7 +976,7 @@ was the wrong step. #24 and #13 are closed.
    swamp extension. A recipe in front of it lets puddlerouter call it.
 2. **The gate above is general.** Asking once, the 10-minute expiry, the same
    session and shadow mode running nothing now apply to any write recipe, in
-   `@puddleworks/recipes` (puddle-works/puddlerecipes#3). Checking each step
+   `@puddleworks/recipes`. Checking each step
    again before it runs is the extension's job, not the engine's.
 3. **Read or write comes from what was agreed.** A recipe does not mark itself
    read-only. The engine takes `effects` from the outcome specification agreed
@@ -982,3 +986,47 @@ was the wrong step. #24 and #13 are closed.
    `worktree_list` extension in `git_worktrees.ts` are cleanup logic. They stay,
    and keep giving today's hint, until the cleanup extension exists. Then the
    step becomes a recipe that calls it, and both files are removed.
+
+## Recipes move out (issue #49)
+
+On 2026-11-04 the router stopped holding recipes. Matching, running, packs, the
+result cache and the sync are all in `@puddleworks/recipes`. The router keeps
+`load`, `recall`, `merged`, `search`, `reply` and the extension hint, and the
+workflow calls the `recipes` instance for `confirm`, `match` and `execute`.
+
+### Decisions
+
+1. **The owner names the reads.** A recipe no longer marks itself read-only.
+   Effects come from the extension's registry labels, and no label counts as a
+   write. `@webframp/github` has no label, so "open prs in …" would ask each
+   time. The owner chose a `reads:` key in their own `puddlerouter.yaml`, naming
+   exact methods. Those run at once, a pack can't set it, and anything unlisted
+   still asks.
+2. **The daily sync starts as the hook exits.** Started at the top of the hook,
+   it held the `recipes` lock while the turn's workflow waited for it. A first
+   sync took 14 s, and the turn gave up at 15 s and went to Claude.
+3. **A skipped typed turn drops a plan, in the background.** It isn't a yes, and
+   only the next turn may confirm. `!` turns, messages from the harness and empty
+   turns are not replies and leave a plan alone.
+4. **A sync pulls a pack again when a fresh checkout lacks its files.** The
+   install list is committed and the pulled files are not, so a new clone saw the
+   pack as current, skipped the pull and could not read its recipes.
+
+### Live check (2026-11-04, real hook, live mode)
+
+Run in a worktree with the route seeded, because it has no Jev key.
+
+| Turn | Result |
+| --- | --- |
+| "open prs in puddle-works/puddlerouter", no index and no pack files | passes in 3 s, and the sync starts after it |
+| The same turn, after the sync | block, "No open pull requests.", from the pack's `github-open-prs` recipe via `reads:` (5 s) |
+| A recipe on a method not in `reads:` | block with the plan: asks before running |
+| `yes` | block with the method's answer; the other steps are skipped |
+| A second `yes` | routed as usual: the plan is used |
+| `no thanks` after a plan | routed as usual: the plan is dropped |
+| `/review`, then `yes` after a plan | the `yes` goes to Claude: the skipped turn dropped the plan |
+| Shadow mode | passes, with "would ask" in the reply; no plan kept |
+| No session id | passes: the recipe can't keep a plan, so nothing runs |
+| No `recipes` instance | the hook passes: `match` fails and `search` runs |
+
+A repeat sync takes about 9 s, and a first one with packs to pull 12 to 17 s.
