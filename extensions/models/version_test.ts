@@ -25,3 +25,20 @@ Deno.test("upgrades leave the settings alone", () => {
     assert(upgrade.upgradeAttributes(settings) === settings);
   }
 });
+
+Deno.test("the recipes instance's version is the pinned one", async () => {
+  const pinned = JSON.parse(
+    await Deno.readTextFile(
+      new URL("./upstream_extensions.json", import.meta.url),
+    ),
+  ) as Record<string, { version: string }>;
+  const instance = parse(
+    await Deno.readTextFile(
+      new URL(
+        "../../models/@puddleworks/recipes/recipes.yaml",
+        import.meta.url,
+      ),
+    ),
+  ) as { typeVersion: string };
+  assertEquals(instance.typeVersion, pinned["@puddleworks/recipes"].version);
+});
