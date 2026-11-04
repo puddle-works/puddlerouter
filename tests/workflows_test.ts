@@ -100,15 +100,19 @@ Deno.test("reply runs after decide whatever happened and gets its answer", async
   assert(inputs.answerCutoff.includes("inputs.answerCutoff"));
 });
 
-Deno.test("match, pick and execute only run for the deterministic route and its match", async () => {
+Deno.test("match, search, pick and execute only run for the deterministic route and its match", async () => {
   const wf = "workflow-puddlerouter.yaml";
   const guards: Record<string, string[]> = {
     match: [
       'steps.route.outputs.choice == "deterministic"',
       "steps.route.outputs.confidence >= inputs.cutoff",
     ],
-    pick: ['steps.match.outputs.kind == "candidates"'],
-    execute: ['steps.match.outputs.kind == "recipe"'],
+    search: [
+      'steps.route.outputs.choice == "deterministic"',
+      "steps.match.outputs.matched",
+    ],
+    pick: ['steps.search.outputs.kind == "candidates"'],
+    execute: ["steps.match.outputs.matched"],
   };
   for (const [name, parts] of Object.entries(guards)) {
     const step = await stepOf(wf, name);
@@ -119,21 +123,112 @@ Deno.test("match, pick and execute only run for the deterministic route and its 
   }
 });
 
-Deno.test("reply waits for pick and execute and gets their results", async () => {
-  const step = await stepOf("workflow-puddlerouter.yaml", "reply");
-  for (const name of ["match", "pick", "execute"]) {
+Deno.test("recipes are matched and run by @puddleworks/recipes, search by the router", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  const match = await stepOf(wf, "match");
+  assertEquals(match.task.modelIdOrName, "recipes");
+  assertEquals(match.task.methodName, "match");
+  const execute = await stepOf(wf, "execute");
+  assertEquals(execute.task.modelIdOrName, "recipes");
+  assertEquals(execute.task.methodName, "execute");
+  const inputs = execute.task.inputs as Record<string, string>;
+  assert(inputs.recipeId.includes("steps.match.outputs.recipeId"));
+  assert(inputs.captures.includes("steps.match.outputs.captures"));
+  assert(inputs.repoDir.includes("inputs.repoDir"));
+  assert(inputs.sessionId.includes("inputs.sessionId"));
+  assert(inputs.mode.includes("inputs.mode"));
+  const search = await stepOf(wf, "search");
+  assertEquals(search.task.modelIdOrName, "puddlerouter");
+  assertEquals(search.task.methodName, "search");
+  assert(
+    search.dependsOn?.some((d) =>
+      d.step === "match" && d.condition.type === "always"
+    ),
+  );
+  const pick = await stepOf(wf, "pick");
+  assert(pick.dependsOn?.some((d) => d.step === "search"));
+  assert(
+    (pick.task.inputs as Record<string, string>).criteria.includes(
+      "steps.search.outputs.criteria",
+    ),
+  );
+});
+
+Deno.test("confirm runs after load, live with a session only, and never fails the run", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "confirm");
+  assertEquals(step.task.modelIdOrName, "recipes");
+  assertEquals(step.task.methodName, "confirm");
+  assertEquals(step.allowFailure, true);
+  assert(step.dependsOn?.some((d) => d.step === "load"));
+  const guard = step.guard ?? "";
+  assert(guard.includes('inputs.mode != "live"'), "shadow has no side effects");
+  assert(guard.includes('inputs.sessionId == ""'));
+  const inputs = step.task.inputs as Record<string, string>;
+  assert(inputs.sessionId.includes("inputs.sessionId"));
+  assert(inputs.repoDir.includes("inputs.repoDir"));
+  // "capture: yes" is a request to log, not a reply to a plan.
+  assert(inputs.text.includes("steps.load.outputs.capture"));
+  assert(inputs.text.includes("steps.load.outputs.text"));
+});
+
+Deno.test("the workflow takes the session id as an input, never in the turn", async () => {
+  const wf = await readYaml("workflows/workflow-puddlerouter.yaml") as {
+    inputs: { properties: Record<string, { default?: unknown }> };
+  };
+  assertEquals(wf.inputs.properties.sessionId?.default, "");
+});
+
+Deno.test("a yes that confirm handled skips every other step", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  for (const name of ["merged", "route", "decide", "match", "search"]) {
+    const step = await stepOf(wf, name);
+    const guard = step.guard ?? "";
+    for (
+      const part of [
+        'steps.confirm.outputs.action == "ran"',
+        'steps.confirm.outputs.action == "refused"',
+      ]
+    ) assert(guard.includes(part), `${name} guard lacks ${part}`);
     assert(
-      name === "match" ||
-        step.dependsOn?.some((d) =>
-          d.step === name && d.condition.type === "always"
-        ),
+      step.dependsOn?.some((d) =>
+        d.step === "confirm" && d.condition.type === "always"
+      ),
+      `${name} lacks an always dep on confirm`,
+    );
+  }
+});
+
+Deno.test("reply waits for confirm, pick and execute and gets their results", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "reply");
+  for (const name of ["confirm", "match", "search", "pick", "execute"]) {
+    assert(
+      step.dependsOn?.some((d) =>
+        d.step === name && d.condition.type === "always"
+      ),
       name,
     );
   }
   const inputs = step.task.inputs as Record<string, string>;
   assert(inputs.resultText.includes("steps.execute.outputs.text"));
+  assert(inputs.resultAction.includes("steps.execute.outputs.action"));
   assert(inputs.pickChoice.includes("steps.pick.outputs.choice"));
-  assert(inputs.matchKind.includes("steps.match.outputs.kind"));
+  assert(inputs.matchKind.includes("steps.match.outputs.matched"));
+  assert(inputs.matchKind.includes("steps.search.outputs.kind"));
+  assert(inputs.recipeId.includes("steps.match.outputs.recipeId"));
+  assert(inputs.candidates.includes("steps.search.outputs.candidates"));
+  const fields: Record<string, string> = {
+    confirmAction: "action",
+    confirmOk: "ok",
+    confirmText: "text",
+    confirmError: "error",
+    confirmRecipeId: "recipeId",
+  };
+  for (const [input, field] of Object.entries(fields)) {
+    assert(
+      inputs[input]?.includes(`steps.confirm.outputs.${field}`),
+      `reply ${input} lacks confirm.${field}`,
+    );
+  }
 });
 
 Deno.test("raise logs a Capture request, only in live mode for a turn nothing can answer, keyed by sourceRef", async () => {
@@ -145,15 +240,17 @@ Deno.test("raise logs a Capture request, only in live mode for a turn nothing ca
   for (
     const part of [
       'inputs.mode == "live"',
-      'steps.match.outputs.kind != "recipe"',
+      'steps.search.outputs.kind == "candidates"',
       'steps.pick.outputs.choice != "none"',
       "steps.pick.outputs.confidence >= inputs.cutoff",
     ]
   ) assert(guard.includes(part), `guard lacks ${part}`);
   const inputs = step.task.inputs as Record<string, string>;
-  assert(inputs.title.includes("steps.match.outputs.requestTitle"));
-  assert(inputs.description.includes("steps.match.outputs.requestDescription"));
-  assert(inputs.sourceRef.includes("steps.match.outputs.requestKey"));
+  assert(inputs.title.includes("steps.search.outputs.requestTitle"));
+  assert(
+    inputs.description.includes("steps.search.outputs.requestDescription"),
+  );
+  assert(inputs.sourceRef.includes("steps.search.outputs.requestKey"));
   const reply = await stepOf("workflow-puddlerouter.yaml", "reply");
   const url = (reply.task.inputs as Record<string, string>).requestUrl;
   for (
@@ -255,19 +352,18 @@ Deno.test("the route cache version is set", async () => {
   assert(/export const ROUTE_CACHE_VERSION = "v\d+"/.test(src));
 });
 
-Deno.test("the recipes sync workflow runs the sync method on a daily schedule and is published", async () => {
-  const file = "workflow-puddlerouter-recipes-sync.yaml";
-  const sync = await stepOf(file, "sync");
-  assertEquals(sync.task.modelIdOrName, "puddlerouter");
-  assertEquals(sync.task.methodName, "sync");
-  const wf = await readYaml(`workflows/${file}`) as {
-    name: string;
-    trigger: { schedule: string };
+Deno.test("the router leans on @puddleworks/recipes and ships no sync of its own", async () => {
+  const manifest = await readYaml("manifest.yaml") as {
+    workflows: string[];
+    dependencies: string[];
   };
-  assertEquals(wf.name, "@puddleworks/puddlerouter-recipes-sync");
-  assertEquals(wf.trigger.schedule, "0 6 * * *");
-  const manifest = await readYaml("manifest.yaml") as { workflows: string[] };
-  assert(manifest.workflows.includes(file));
+  assert(manifest.dependencies.includes("@puddleworks/recipes"));
+  assert(!manifest.workflows.includes("workflow-puddlerouter-recipes-sync.yaml"));
+  const def = await readYaml("models/@puddleworks/recipes/recipes.yaml") as {
+    type: string;
+    name: string;
+  };
+  assertEquals([def.type, def.name], ["@puddleworks/recipes", "recipes"]);
 });
 
 Deno.test("the key check asks Jev a small question daily and raises one issue per outage", async () => {
@@ -334,7 +430,7 @@ Deno.test("merged runs after load, never for an empty or withheld turn, and neve
 
 Deno.test("a merged turn skips Jev and the recipe search", async () => {
   const wf = "workflow-puddlerouter.yaml";
-  for (const name of ["route", "decide", "match"]) {
+  for (const name of ["route", "decide", "match", "search"]) {
     const step = await stepOf(wf, name);
     assert((step.guard ?? "").includes(MERGED), `${name} guard lacks merged`);
     assert(
@@ -412,17 +508,20 @@ Deno.test("a capture: turn skips Jev and the merged check", async () => {
   }
 });
 
-Deno.test("match runs for a capture: turn that is not empty or withheld, and is told so", async () => {
-  const step = await stepOf("workflow-puddlerouter.yaml", "match");
-  const guard = step.guard ?? "";
+Deno.test("a capture: turn skips recipes and goes to search, unless empty or withheld", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  const match = await stepOf(wf, "match");
+  assert((match.guard ?? "").includes(CAPTURE), "match guard lacks capture");
+  const search = await stepOf(wf, "search");
+  const guard = search.guard ?? "";
   for (
     const part of [
       CAPTURE,
       "steps.load.outputs.empty",
       "steps.load.outputs.withheld",
     ]
-  ) assert(guard.includes(part), `match guard lacks ${part}`);
-  const inputs = step.task.inputs as Record<string, string>;
+  ) assert(guard.includes(part), `search guard lacks ${part}`);
+  const inputs = search.task.inputs as Record<string, string>;
   assert(inputs.capture?.includes(CAPTURE));
 });
 

@@ -12,24 +12,21 @@ import {
 import { parseConfig } from "./_lib/config.ts";
 import {
   buildReply,
-  captureMatch,
+  captureSearch,
   cleanTurn,
   decisionAnswer,
   effectiveRoute,
-  executeRecipe,
-  findMatch,
   loadTurn,
   looksSecret,
   model,
   normalise,
   recallRoute,
   requestDraft,
-  resultCacheKey,
   ROUTE_CACHE_VERSION,
   routeCacheKey,
+  searchTurn,
   sourceRef,
   type Store,
-  withPacks,
   withRecall,
 } from "./puddlerouter.ts";
 
@@ -433,19 +430,7 @@ function fakeExec(replies: Record<string, string>) {
   return { exec, calls };
 }
 
-Deno.test("findMatch picks a recipe without searching", async () => {
-  const { exec, calls } = fakeExec({});
-  const m = await findMatch(
-    "git status",
-    exec,
-    new Date("2026-10-13T10:00:00Z"),
-  );
-  assertEquals(m.kind, "recipe");
-  assertEquals(m.recipeId, "git-status");
-  assertEquals(calls.length, 0);
-});
-
-Deno.test("findMatch lists candidates from the local types and the registry", async () => {
+Deno.test("searchTurn lists candidates from the local types and the registry", async () => {
   const { exec, calls } = fakeExec({
     "model type search": JSON.stringify({
       results: [{ raw: "@swamp/hetzner-cloud", normalized: "x" }],
@@ -457,7 +442,7 @@ Deno.test("findMatch lists candidates from the local types and the registry", as
       ],
     }),
   });
-  const m = await findMatch("list the hetzner servers in my account", exec);
+  const m = await searchTurn("list the hetzner servers in my account", exec);
   assertEquals(m.kind, "candidates");
   assertEquals(m.query, "hetzner servers account");
   assertEquals(m.candidates.map((c) => c.name), [
@@ -469,35 +454,12 @@ Deno.test("findMatch lists candidates from the local types and the registry", as
   assert(calls.every((c) => !c.join(" ").includes("hetzner servers in my")));
 });
 
-Deno.test("findMatch fails open to none when searches fail or find nothing", async () => {
-  const none = await findMatch("list the hetzner servers", fakeExec({}).exec);
+Deno.test("searchTurn fails open to none when searches fail or find nothing", async () => {
+  const none = await searchTurn("list the hetzner servers", fakeExec({}).exec);
   assertEquals(none.kind, "none");
   assertEquals(none.candidates, []);
-  const empty = await findMatch("hello", fakeExec({}).exec);
+  const empty = await searchTurn("hello", fakeExec({}).exec);
   assertEquals(empty.kind, "none");
-});
-
-Deno.test("executeRecipe runs the recipe and returns its text", async () => {
-  const { exec } = fakeExec({
-    "behavior run @swamp/git status git": JSON.stringify({
-      dataArtifacts: [{
-        name: "status",
-        attributes: {
-          branch: "main",
-          entries: [],
-        },
-      }],
-    }),
-  });
-  const r = await executeRecipe("git-status", [], exec, "/repo");
-  assertEquals(r.ok, true);
-  assert(r.text.length > 0);
-});
-
-Deno.test("executeRecipe reports an unknown recipe as a failure", async () => {
-  const r = await executeRecipe("nope", [], fakeExec({}).exec, "/repo");
-  assertEquals(r.ok, false);
-  assertMatch(r.error, /unknown recipe/);
 });
 
 const detArgs = {
@@ -602,25 +564,7 @@ Deno.test("buildReply does not use a recipe off the deterministic route", () => 
   assertEquals(r.action, "pass");
 });
 
-Deno.test("match and execute write one resource each", async () => {
-  const w1: Written[] = [];
-  await model.methods.match.execute(
-    { text: "git status", repoDir: "/nonexistent" },
-    fakeContext(w1),
-  );
-  assertEquals(w1.length, 1);
-  assertEquals(w1[0].spec, "match");
-  assertEquals(w1[0].data.recipeId, "git-status");
-  const w2: Written[] = [];
-  await model.methods.execute.execute(
-    { recipeId: "nope", captures: [], repoDir: "/nonexistent" },
-    fakeContext(w2),
-  );
-  assertEquals(w2[0].spec, "result");
-  assertEquals(w2[0].data.ok, false);
-});
-
-Deno.test("findMatch offers only allowlisted extensions", async () => {
+Deno.test("searchTurn offers only allowlisted extensions", async () => {
   const { exec } = fakeExec({
     "extension search": JSON.stringify({
       extensions: [
@@ -629,7 +573,7 @@ Deno.test("findMatch offers only allowlisted extensions", async () => {
       ],
     }),
   });
-  const m = await findMatch("list the hetzner servers", exec);
+  const m = await searchTurn("list the hetzner servers", exec);
   assertEquals(m.candidates.map((c) => c.name), ["@swamp/hetzner-cloud"]);
 });
 
@@ -654,8 +598,8 @@ Deno.test("requestDraft makes a one-line title, a plain description with the tur
   assertEquals(d.key, "puddlerouter:0123456789abcdef");
 });
 
-Deno.test("findMatch carries the request draft for a turn nothing can answer", async () => {
-  const m = await findMatch(
+Deno.test("searchTurn carries the request draft for a turn nothing can answer", async () => {
+  const m = await searchTurn(
     "list the hetzner servers",
     fakeExec({}).exec,
     new Date(),
@@ -717,34 +661,9 @@ Deno.test("buildReply does not log a request for a failed recipe or a hint", () 
 
 // ---- step 6: local config ----
 
-const LOCAL = parseConfig(`
-allow: ['@acme/*']
-recipes:
-  - id: gh-open-prs
-    extension: '@webframp/github'
-    method: list_prs
-    definition: github
-    dataName: prs
-    pattern: '^list the open prs in ([\\w.-]+/[\\w.-]+)$'
-    inputs: { repo: { capture: 1, as: repo } }
-    each: { path: items, line: '#{number} {title}' }
-    template: "{count} open:\\n{lines}"
-`);
+const LOCAL = parseConfig(`allow: ['@acme/*']`);
 
-Deno.test("findMatch tries local recipes before the built-in ones", async () => {
-  const m = await findMatch(
-    "list the open PRs in puddle-works/puddleworks",
-    fakeExec({}).exec,
-    new Date(),
-    "puddlerouter:0123456789abcdef",
-    LOCAL,
-  );
-  assertEquals(m.kind, "recipe");
-  assertEquals(m.recipeId, "gh-open-prs");
-  assertEquals(m.captures, ["puddle-works/puddleworks"]);
-});
-
-Deno.test("findMatch offers extensions the file allows", async () => {
+Deno.test("searchTurn offers extensions the file allows", async () => {
   const { exec } = fakeExec({
     "extension search": JSON.stringify({
       extensions: [
@@ -753,7 +672,7 @@ Deno.test("findMatch offers extensions the file allows", async () => {
       ],
     }),
   });
-  const m = await findMatch(
+  const m = await searchTurn(
     "list the hetzner servers",
     exec,
     new Date(),
@@ -761,65 +680,6 @@ Deno.test("findMatch offers extensions the file allows", async () => {
     LOCAL,
   );
   assertEquals(m.candidates.map((c) => c.name), ["@acme/hetzner"]);
-});
-
-Deno.test("executeRecipe runs a local recipe", async () => {
-  const { exec, calls } = fakeExec({
-    "behavior run @webframp/github list_prs github": JSON.stringify({
-      dataArtifacts: [{
-        name: "prs",
-        attributes: { items: [{ number: 4, title: "fix" }] },
-      }],
-    }),
-  });
-  const r = await executeRecipe(
-    "gh-open-prs",
-    ["puddle-works/puddleworks"],
-    exec,
-    "/repo",
-    LOCAL,
-  );
-  assertEquals(r, { ok: true, text: "1 open:\n#4 fix", error: "" });
-  assert(calls[0].includes("repo=puddle-works/puddleworks"));
-});
-
-Deno.test("executeRecipe refuses a capture of the wrong shape", async () => {
-  const r = await executeRecipe(
-    "gh-open-prs",
-    ["x; rm -rf /"],
-    fakeExec({}).exec,
-    "/repo",
-    LOCAL,
-  );
-  assertEquals(r.ok, false);
-  assertMatch(r.error, /bad input/);
-});
-
-Deno.test("match reads puddlerouter.yaml from the repo dir", async () => {
-  const dir = await Deno.makeTempDir();
-  try {
-    await Deno.writeTextFile(
-      `${dir}/puddlerouter.yaml`,
-      `recipes:\n  - id: my-status\n    extension: '@swamp/git'\n    method: status\n    definition: git\n    dataName: status\n    pattern: '^repo state$'\n    template: ok\n`,
-    );
-    const written: Written[] = [];
-    await model.methods.match.execute(
-      { text: "repo state", repoDir: dir },
-      fakeContext(written),
-    );
-    assertEquals(written[0].data.recipeId, "my-status");
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
-});
-
-Deno.test("match without a puddlerouter.yaml uses the built-in recipes", async () => {
-  const written: Written[] = [];
-  await model.methods.match.execute(
-    { text: "git status", repoDir: "/nonexistent" },
-    fakeContext(written),
-  );
-  assertEquals(written[0].data.recipeId, "git-status");
 });
 
 // ---- caches ----
@@ -1040,10 +900,10 @@ const SEARCH = {
   }),
 };
 
-Deno.test("findMatch serves a repeated search from the cache", async () => {
+Deno.test("searchTurn serves a repeated search from the cache", async () => {
   const { store, writes } = fakeStore();
   const first = fakeExec(SEARCH);
-  const a = await findMatch(
+  const a = await searchTurn(
     "list the hetzner servers",
     first.exec,
     T0,
@@ -1055,7 +915,7 @@ Deno.test("findMatch serves a repeated search from the cache", async () => {
   assertEquals(writes.length, 1);
   assertEquals(writes[0].spec, "searchCache");
   const second = fakeExec({});
-  const b = await findMatch(
+  const b = await searchTurn(
     "list the hetzner servers",
     second.exec,
     new Date(T0.getTime() + 3600_000),
@@ -1067,9 +927,9 @@ Deno.test("findMatch serves a repeated search from the cache", async () => {
   assertEquals(b.candidates, a.candidates);
 });
 
-Deno.test("findMatch searches again once the cached search is a day old", async () => {
+Deno.test("searchTurn searches again once the cached search is a day old", async () => {
   const { store } = fakeStore();
-  await findMatch(
+  await searchTurn(
     "list the hetzner servers",
     fakeExec(SEARCH).exec,
     T0,
@@ -1078,7 +938,7 @@ Deno.test("findMatch searches again once the cached search is a day old", async 
     store,
   );
   const later = fakeExec(SEARCH);
-  await findMatch(
+  await searchTurn(
     "list the hetzner servers",
     later.exec,
     new Date(T0.getTime() + DAY + 1000),
@@ -1089,9 +949,9 @@ Deno.test("findMatch searches again once the cached search is a day old", async 
   assertEquals(later.calls.length, 2);
 });
 
-Deno.test("findMatch does not cache when a search failed", async () => {
+Deno.test("searchTurn does not cache when a search failed", async () => {
   const { store, writes } = fakeStore();
-  await findMatch(
+  await searchTurn(
     "list the hetzner servers",
     fakeExec({ "extension search": SEARCH["extension search"] }).exec,
     T0,
@@ -1102,10 +962,10 @@ Deno.test("findMatch does not cache when a search failed", async () => {
   assertEquals(writes.length, 0);
 });
 
-Deno.test("findMatch applies the allowlist after the cache", async () => {
+Deno.test("searchTurn applies the allowlist after the cache", async () => {
   const { store } = fakeStore();
   const open = parseConfig("allow: ['@acme/*']");
-  await findMatch(
+  await searchTurn(
     "list the hetzner servers",
     fakeExec(SEARCH).exec,
     T0,
@@ -1113,7 +973,7 @@ Deno.test("findMatch applies the allowlist after the cache", async () => {
     open,
     store,
   );
-  const strict = await findMatch(
+  const strict = await searchTurn(
     "list the hetzner servers",
     fakeExec({}).exec,
     T0,
@@ -1125,284 +985,6 @@ Deno.test("findMatch applies the allowlist after the cache", async () => {
     strict.candidates.map((c) => c.name).includes("@acme/local"),
     false,
   );
-});
-
-Deno.test("match passes a resource-backed cache to findMatch", async () => {
-  const written: Written[] = [];
-  await model.methods.match.execute(
-    { text: "git status", repoDir: "/nonexistent" },
-    fakeContext(written),
-  );
-  assertEquals(written.length, 1);
-});
-
-// result cache
-
-const CACHED_RECIPE = parseConfig(`
-recipes:
-  - id: gh-open-prs
-    extension: '@webframp/github'
-    method: list_prs
-    definition: github
-    dataName: prs
-    pattern: '^list the open prs in ([\\w.-]+/[\\w.-]+)$'
-    inputs: { repo: { capture: 1, as: repo } }
-    cacheFor: 5m
-    template: "ok"
-`);
-
-Deno.test("cacheFor is parsed to milliseconds; a bad value drops the recipe", () => {
-  assertEquals(CACHED_RECIPE.errors, []);
-  assertEquals(CACHED_RECIPE.recipes[0].cacheFor, 300_000);
-  const bad = parseConfig(`
-recipes:
-  - id: x
-    extension: '@webframp/github'
-    method: m
-    definition: d
-    dataName: n
-    pattern: '^x$'
-    cacheFor: forever
-    template: t
-`);
-  assertEquals(bad.recipes.length, 0);
-  assertEquals(bad.errors.length, 1);
-});
-
-Deno.test("no built-in recipe is cached", async () => {
-  const { RECIPES } = await import("./_lib/recipes.ts");
-  assertEquals(RECIPES.filter((r) => r.cacheFor !== undefined), []);
-});
-
-Deno.test("executeRecipe without cacheFor never touches the store", async () => {
-  const { store, writes } = fakeStore();
-  await executeRecipe(
-    "nope",
-    [],
-    fakeExec({}).exec,
-    "/repo",
-    undefined,
-    store,
-    T0,
-  );
-  assertEquals(writes.length, 0);
-});
-
-Deno.test("executeRecipe with cacheFor stores a success and serves the repeat", async () => {
-  const { store, writes } = fakeStore();
-  const exec = fakeExec({
-    "behavior run": JSON.stringify({
-      dataArtifacts: [{ name: "prs", attributes: {} }],
-    }),
-  });
-  const first = await executeRecipe(
-    "gh-open-prs",
-    ["a/b"],
-    exec.exec,
-    "/repo",
-    CACHED_RECIPE,
-    store,
-    T0,
-  );
-  assertEquals(first.ok, true);
-  assertEquals(first.cached ?? false, false);
-  assertEquals(writes.map((w) => w.spec), ["resultCache"]);
-  const second = await executeRecipe(
-    "gh-open-prs",
-    ["a/b"],
-    exec.exec,
-    "/repo",
-    CACHED_RECIPE,
-    store,
-    new Date(T0.getTime() + 60_000),
-  );
-  assertEquals(exec.calls.length, 1);
-  assertEquals(second, { ok: true, text: "ok", error: "", cached: true });
-});
-
-Deno.test("executeRecipe does not cache a failed run", async () => {
-  const { store, writes } = fakeStore();
-  const r = await executeRecipe(
-    "gh-open-prs",
-    ["a/b"],
-    fakeExec({}).exec,
-    "/repo",
-    CACHED_RECIPE,
-    store,
-    T0,
-  );
-  assertEquals(r.ok, false);
-  assertEquals(writes.length, 0);
-});
-
-Deno.test("executeRecipe serves a cached result and expires it after cacheFor", async () => {
-  const k = await resultCacheKey("gh-open-prs", ["a/b"]);
-  const { store } = fakeStore({
-    [k]: { text: "cached answer", cachedAt: T0.toISOString() },
-  });
-  const calls = fakeExec({});
-  const fresh = await executeRecipe(
-    "gh-open-prs",
-    ["a/b"],
-    calls.exec,
-    "/repo",
-    CACHED_RECIPE,
-    store,
-    new Date(T0.getTime() + 60_000),
-  );
-  assertEquals(fresh, {
-    ok: true,
-    text: "cached answer",
-    error: "",
-    cached: true,
-  });
-  assertEquals(calls.calls.length, 0);
-  const stale = await executeRecipe(
-    "gh-open-prs",
-    ["a/b"],
-    calls.exec,
-    "/repo",
-    CACHED_RECIPE,
-    store,
-    new Date(T0.getTime() + 6 * 60_000),
-  );
-  assertEquals(stale.cached ?? false, false);
-  assert(calls.calls.length > 0);
-});
-
-// ---- recipe packs ----
-
-const PACK_RAW = {
-  id: "github-open-prs",
-  extension: "@webframp/github",
-  method: "list_prs",
-  definition: "github",
-  dataName: "prs-{repo}-{state}",
-  pattern: "^open prs in ([\\w.-]+/[\\w.-]+)$",
-  inputs: { repo: { capture: 1, as: "repo" } },
-  fixed: { state: "open" },
-  template: "ok",
-};
-
-function indexAt(syncedAt: Date, recipes: unknown[] = [PACK_RAW]) {
-  return {
-    recipes: recipes.map((recipe) => ({ pack: "@puddleworks/p", recipe })),
-    packs: [{ name: "@puddleworks/p", version: "1" }],
-    errors: [],
-    syncedAt: syncedAt.toISOString(),
-  };
-}
-
-Deno.test("withPacks adds pack recipes after the local ones", async () => {
-  const local = parseConfig(`
-recipes:
-  - id: mine
-    extension: '@webframp/github'
-    method: list_prs
-    definition: github
-    dataName: prs
-    pattern: '^mine$'
-    template: t
-`);
-  const { store } = fakeStore({ "recipe-index": indexAt(T0) });
-  const { config, notes } = await withPacks(local, store, T0);
-  assertEquals(config.recipes.map((r) => r.id), ["mine", "github-open-prs"]);
-  assertEquals(notes, []);
-  assertEquals(config.allowlist, local.allowlist);
-});
-
-Deno.test("withPacks with no index, a broken index or a failing store adds nothing", async () => {
-  const none = await withPacks(parseConfig(""), fakeStore().store, T0);
-  assertEquals(none.config.recipes, []);
-  assertEquals(none.notes, []);
-  const broken = await withPacks(
-    parseConfig(""),
-    fakeStore({ "recipe-index": { recipes: "x" } }).store,
-    T0,
-  );
-  assertEquals(broken.config.recipes, []);
-  assertEquals(broken.notes.length, 1);
-  const failing: Store = {
-    read: () => Promise.reject(new Error("down")),
-    write: () => Promise.resolve(),
-  };
-  assertEquals(
-    (await withPacks(parseConfig(""), failing, T0)).config.recipes,
-    [],
-  );
-});
-
-Deno.test("withPacks still uses an index older than a day and says it is stale", async () => {
-  const old = new Date(T0.getTime() - 2 * DAY);
-  const { store } = fakeStore({ "recipe-index": indexAt(old) });
-  const { config, notes } = await withPacks(parseConfig(""), store, T0);
-  assertEquals(config.recipes.length, 1);
-  assertEquals(notes.length, 1);
-  assertMatch(notes[0], /stale/);
-});
-
-Deno.test("withPacks drops a pack recipe that clashes, is no longer allowed or is bad, and says so", async () => {
-  const clash = { ...PACK_RAW, id: "git-status" };
-  const evil = { ...PACK_RAW, id: "evil", extension: "@evil/x" };
-  const bad = { ...PACK_RAW, id: "bad", pattern: "^(" };
-  const { store } = fakeStore({
-    "recipe-index": indexAt(T0, [clash, evil, bad, PACK_RAW]),
-  });
-  const { config, notes } = await withPacks(parseConfig(""), store, T0);
-  assertEquals(config.recipes.map((r) => r.id), ["github-open-prs"]);
-  assertEquals(notes.length, 3);
-});
-
-Deno.test("a pack recipe is matched by findMatch and run by executeRecipe", async () => {
-  const { store } = fakeStore({ "recipe-index": indexAt(T0) });
-  const { config } = await withPacks(parseConfig(""), store, T0);
-  const m = await findMatch(
-    "open prs in a/b",
-    fakeExec({}).exec,
-    T0,
-    REF,
-    config,
-    store,
-  );
-  assertEquals(m.kind, "recipe");
-  assertEquals(m.recipeId, "github-open-prs");
-  const exec = fakeExec({
-    "behavior run": JSON.stringify({
-      dataArtifacts: [{ name: "prs-a-b-open", attributes: {} }],
-    }),
-  });
-  const r = await executeRecipe(
-    m.recipeId,
-    m.captures,
-    exec.exec,
-    "/repo",
-    config,
-    store,
-    T0,
-  );
-  assertEquals(r.ok, true);
-  const call = exec.calls[0];
-  assertEquals(call.slice(2, 5), ["@webframp/github", "list_prs", "github"]);
-  assert(call.includes("repo=a/b") && call.includes("state=open"));
-});
-
-Deno.test("match reads the recipe index through the resource store", async () => {
-  const written: Written[] = [];
-  const context = {
-    ...fakeContext(written),
-    readResource: (name: string) =>
-      Promise.resolve(name === "recipe-index" ? indexAt(new Date()) : null),
-  };
-  await model.methods.match.execute(
-    { text: "open prs in a/b", repoDir: "/nonexistent" },
-    context,
-  );
-  assertEquals(written[0].data.recipeId, "github-open-prs");
-});
-
-Deno.test("the model has a recipeIndex resource and a sync method", () => {
-  assertEquals(model.resources.recipeIndex.lifetime, "7d");
-  assert("sync" in model.methods);
 });
 
 const MERGED_TEXT =
@@ -1541,8 +1123,8 @@ Deno.test("loadTurn withholds a secret capture: turn but still marks it", async 
   assertEquals(turn.withheld, true);
 });
 
-Deno.test("captureMatch drafts the request from the turn without searching", () => {
-  const m = captureMatch(
+Deno.test("captureSearch drafts the request from the turn without searching", () => {
+  const m = captureSearch(
     "add a weather recipe\nfor Utrecht " + "x".repeat(200),
     "puddlerouter:0123456789abcdef",
     new Date("2026-10-27T10:00:00Z"),
@@ -1557,12 +1139,12 @@ Deno.test("captureMatch drafts the request from the turn without searching", () 
   assertMatch(m.requestDescription, /capture: prefix/);
   assertMatch(m.requestDescription, /puddlerouter:0123456789abcdef/);
   assertEquals(m.requestKey, "puddlerouter:0123456789abcdef");
-  assertEquals(m.matchedAt, "2026-10-27T10:00:00.000Z");
+  assertEquals(m.searchedAt, "2026-10-27T10:00:00.000Z");
 });
 
-Deno.test("match for a capture: turn searches nothing and writes the draft", async () => {
+Deno.test("search for a capture: turn searches nothing and writes the draft", async () => {
   const w: Written[] = [];
-  await model.methods.match.execute(
+  await model.methods.search.execute(
     {
       text: "git status",
       sourceRef: "puddlerouter:0123456789abcdef",
@@ -1573,7 +1155,6 @@ Deno.test("match for a capture: turn searches nothing and writes the draft", asy
   );
   assertEquals(w.length, 1);
   assertEquals(w[0].data.kind, "none");
-  assertEquals(w[0].data.recipeId, "");
   assertEquals(w[0].data.requestTitle, "git status");
 });
 
@@ -1621,4 +1202,191 @@ Deno.test("buildReply in shadow mode records that live would log the capture: tu
   assertEquals(r.action, "pass");
   assertEquals(r.wouldAction, "block");
   assertEquals(r.reason, "shadow: capture: prefix, would log a request");
+});
+
+// ---- recipes live in @puddleworks/recipes ----
+
+Deno.test("the router has no recipe code of its own", async () => {
+  for (const method of ["match", "execute", "sync"]) {
+    assert(!(method in model.methods), `${method} should be gone`);
+  }
+  for (const spec of ["match", "result", "resultCache", "recipeIndex"]) {
+    assert(!(spec in model.resources), `${spec} should be gone`);
+  }
+  assert("search" in model.methods);
+  assert("search" in model.resources);
+  for (const gone of ["recipes.ts", "packs.ts"]) {
+    await assertRejects(() =>
+      Deno.stat(new URL(`./_lib/${gone}`, import.meta.url))
+    );
+  }
+});
+
+Deno.test("search writes one resource and finds no recipes", async () => {
+  const written: Written[] = [];
+  await model.methods.search.execute(
+    { text: "is it?", sourceRef: "puddlerouter:0123", repoDir: "/nonexistent" },
+    fakeContext(written),
+  );
+  assertEquals(written.length, 1);
+  assertEquals(written[0].spec, "search");
+  assertEquals(written[0].data.kind, "none");
+  assertEquals("recipeId" in written[0].data, false);
+});
+
+Deno.test("search reads the allow list from puddlerouter.yaml in the repo dir", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      `${dir}/puddlerouter.yaml`,
+      "allow: ['@acme/*']\nreads: ['@webframp/github list_prs']\n",
+    );
+    const written: Written[] = [];
+    await model.methods.search.execute(
+      { text: "is it?", repoDir: dir },
+      fakeContext(written),
+    );
+    assertEquals(written[0].data.kind, "none");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+const ASKED =
+  "gh-merge runs @webframp/github merge_pull_request on github with n=4, which " +
+  "makes changes. Reply yes to run it; anything else drops it. The plan lapses " +
+  "after 10 minutes.";
+
+Deno.test("buildReply blocks with the plan when a write recipe asks first", () => {
+  const r = buildReply({
+    ...detArgs,
+    matchKind: "recipe",
+    recipeId: "gh-merge",
+    resultAction: "ask",
+    resultOk: true,
+    resultText: ASKED,
+  });
+  assertEquals(r.action, "block");
+  assert(r.text.startsWith(ASKED));
+  assertMatch(r.text, /recipe gh-merge/);
+  assertMatch(r.text, /without Claude/);
+  assertMatch(r.text, /starting with llm:/);
+  assert(!r.text.includes("Answered by"), "nothing was answered yet");
+  assertEquals(r.recipe, "gh-merge");
+  assertEquals(r.reason, "recipe gh-merge asked before running");
+});
+
+Deno.test("buildReply in shadow mode passes and records that live mode would ask", () => {
+  const text = "Shadow mode: would ask before running it. gh-merge runs it.";
+  const r = buildReply({
+    ...detArgs,
+    mode: "shadow",
+    matchKind: "recipe",
+    recipeId: "gh-merge",
+    resultAction: "would-ask",
+    resultOk: true,
+    resultText: text,
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.text, "");
+  assertEquals(r.wouldAction, "block");
+  assert(r.wouldText.startsWith(text));
+  assertEquals(r.reason, "shadow: recipe gh-merge would ask before running");
+});
+
+Deno.test("buildReply passes when execute did nothing", () => {
+  const r = buildReply({
+    ...detArgs,
+    matchKind: "recipe",
+    recipeId: "gh-merge",
+    resultAction: "none",
+    resultOk: false,
+    resultText: "",
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.reason, "recipe gh-merge failed");
+});
+
+// `confirm` handled the turn: nothing else in the workflow ran for it.
+const CONFIRMED = {
+  mode: "live" as const,
+  sourceRef: "puddlerouter:0123456789abcdef",
+  cutoff: 0.7,
+  complete: true,
+  confirmRecipeId: "gh-merge",
+};
+
+Deno.test("buildReply blocks with the recipe's answer after a yes", () => {
+  const r = buildReply({
+    ...CONFIRMED,
+    confirmAction: "ran",
+    confirmOk: true,
+    confirmText: "Merged #4.",
+  });
+  assertEquals(r.action, "block");
+  assertMatch(r.text, /^Merged #4\./);
+  assertMatch(r.text, /recipe gh-merge/);
+  assertEquals(r.route, "deterministic");
+  assertEquals(r.recipe, "gh-merge");
+  assertEquals(r.reason, "recipe gh-merge answered after a yes");
+});
+
+Deno.test("buildReply tells Claude to report a recipe that failed after a yes", () => {
+  const r = buildReply({
+    ...CONFIRMED,
+    confirmAction: "ran",
+    confirmOk: false,
+    confirmText: "",
+    confirmError: "merge conflict",
+  });
+  assertEquals(r.action, "hint");
+  assertMatch(r.text, /gh-merge/);
+  assertMatch(r.text, /merge conflict/);
+  assertMatch(r.text, /Tell the user/);
+  assertEquals(r.route, "deterministic");
+  assertEquals(r.reason, "recipe gh-merge failed after a yes");
+});
+
+Deno.test("buildReply tells Claude when a yes did nothing, and why", () => {
+  const r = buildReply({
+    ...CONFIRMED,
+    confirmAction: "refused",
+    confirmOk: false,
+    confirmText: "",
+    confirmError: "the plan expired",
+  });
+  assertEquals(r.action, "hint");
+  assertMatch(r.text, /gh-merge/);
+  assertMatch(r.text, /the plan expired/);
+  assertMatch(r.text, /Tell the user/);
+  assertMatch(r.text, /do not/i);
+  assertEquals(r.route, "deterministic");
+  assertEquals(r.reason, "a yes ran nothing: the plan expired");
+});
+
+Deno.test("buildReply routes as usual when confirm had nothing to do", () => {
+  const r = buildReply({
+    ...detArgs,
+    choice: "llm",
+    confirmAction: "none",
+    confirmOk: false,
+    confirmText: "",
+    confirmError: "no plan to confirm",
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.route, "llm");
+  assertEquals(r.reason, "llm route");
+});
+
+Deno.test("buildReply trusts confirm over a route recalled for the same words", () => {
+  const r = buildReply({
+    ...CONFIRMED,
+    choice: "llm",
+    confidence: 0.9,
+    confirmAction: "ran",
+    confirmOk: true,
+    confirmText: "Merged #4.",
+  });
+  assertEquals(r.action, "block");
+  assertEquals(r.route, "deterministic");
 });

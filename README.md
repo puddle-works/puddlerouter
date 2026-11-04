@@ -6,7 +6,7 @@ workflow, and Jev (TypeSafe's System One model) picks a route:
 
 | Route           | Meaning                                                 | What happens (once built)                                                                                                                                                                                        |
 | --------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deterministic` | A program could answer it exactly through an API or CLI | A built-in recipe runs and its answer is shown (`@swamp/git` status, log, branch); otherwise Claude gets a hint naming an extension, or, if none fits, one request is logged in Capture and its link shown (live mode) |
+| `deterministic` | A program could answer it exactly through an API or CLI | A recipe from [`@puddleworks/recipes`](#recipes) runs and its answer is shown (git status, log, branch, and your own); otherwise Claude gets a hint naming an extension, or, if none fits, one request is logged in Capture and its link shown (live mode) |
 | `decision`      | A yes/no judgement about text in the turn               | Jev answers it (built in step 2)                                                                                                                                                                                 |
 | `llm`           | Anything else, or Jev is unsure                         | Claude runs as normal                                                                                                                                                                                            |
 
@@ -38,16 +38,21 @@ prompt ─▶ hooks/puddlerouter.sh
              recall Jev's earlier route, decision and pick for this exact turn
                     (route cache, 7 days); route, decide and pick are skipped
                     for what it holds
+             confirm if the session's last turn showed a recipe's plan: run it
+                    when this turn is only a yes and skip the steps below up to
+                    reply; drop it otherwise (live mode with a session only)
              merged a turn that only says a PR merged ("merged", "12 is
                     merged"): check its worktree read-only and hint the steps
                     to finish; route, decide and match are skipped
              route  jev.choice over deterministic / decision / llm (cut-off 0.7)
              decide jev.noul, only for a decision turn with nothing pasted,
                     fenced or cut; yes at ≥ 0.8, no at ≤ 0.2, else unsure
-             match  deterministic turn: a built-in recipe, else search extensions;
-                    capture: turn: the request draft, with no recipe or search
+             match  deterministic turn: find a recipe (@puddleworks/recipes)
+             search no recipe: search extensions; capture: turn: the request
+                    draft, with no recipe or search
              pick   jev.choice over up to 3 allowlisted candidates, or none
-             execute run the recipe through swamp (@swamp/git), read-only
+             execute run the recipe (@puddleworks/recipes), or show its plan if
+                    it makes changes
              raise  live mode, nothing can answer or a capture: turn: one Capture
                     request per turn (sourceRef) via @puddleworks/capture-log-request
              reply  {action: block|hint|pass, text} → reply
@@ -85,6 +90,12 @@ waits for the workflow like live mode (1 to 6 seconds, up to
 `PUDDLEROUTER_TIMEOUT`); a run that times out is stopped, so it is missing from
 the shadow log.
 
+A recipe that makes changes, or whose extension doesn't say it only reads, runs
+nothing at first. The turn is blocked and shows what would run, and the next
+turn in the same session runs it if it is only a yes (`yes`, `y` or `go`). Any
+other turn drops the plan and is routed as usual. A plan over 10 minutes old does
+nothing, and the reply says so. Shadow mode shows the plan and never keeps it.
+
 A blocked decision shows, in place of Claude's reply:
 
 ```
@@ -94,18 +105,15 @@ Answered by puddlerouter without Claude. To ask Claude instead, send the prompt 
 
 ## Subprocesses
 
-`match` and `execute` run `swamp` as a subprocess (`Deno.Command`, no shell),
-because a model method has no way to call another model type. Every argument is
-checked first:
+`search` runs `swamp` as a subprocess (`Deno.Command`, no shell), because a model
+method has no way to call another model type. Every argument is checked first:
 
-- A recipe's arguments are fixed words, the runtime repo path and its captured
-  inputs. The pattern captures digits only, and they go in as
-  `--input k=v --literal-inputs`.
 - A search passes at most four words, each matching `[a-z0-9][a-z0-9_-]*` and
-  three or more characters, from `searchQuery` in `_lib/recipes.ts`.
-- Only allowlisted extensions are pulled or run (`@swamp/*`, `@mesgme/*`,
-  `@webframp/*`, `@puddleworks/*`, plus whatever `puddlerouter.yaml` adds), and
-  only recipes marked read-only.
+  three or more characters, from `searchQuery` in `_lib/search.ts`.
+- Only allowlisted extensions are offered as candidates (`@swamp/*`, `@mesgme/*`,
+  `@webframp/*`, `@puddleworks/*`, plus whatever `puddlerouter.yaml` adds).
+
+`@puddleworks/recipes` runs recipes the same way; its README says how.
 
 The `merged` step runs no subprocess of its own: it calls `@swamp/git` and
 `@webframp/github` through `context.runModel`, with only PR numbers and the
@@ -113,51 +121,40 @@ origin repo's `owner/name` as arguments.
 
 ## Local config
 
-`<repoDir>/puddlerouter.yaml` (gitignored; copy `puddlerouter.example.yaml`) is
-read on every `match` and `execute`. It has two optional keys:
+`<repoDir>/puddlerouter.yaml` (gitignored; copy `puddlerouter.example.yaml`) has
+three optional keys. A bad entry or an unreadable file is dropped and logged; the
+rest still applies.
 
 - `allow:` extra extension names or `@scope/*` scopes. They add to the defaults.
-- `recipes:` local recipes, tried before the built-in ones. Fields: `id`,
-  `extension`, `method`, `definition`, `dataName`, `pattern` (must match the
-  whole turn), `readOnly` (only `true`), `inputs` (`name: {capture: 1..9, as:
-  int|repo|word}`), `fixed`, `each {path, line}`, `template` (`{count}`,
-  `{lines}` and any attribute path) and `empty`, `cacheFor`. `dataName` may use `{input}`
-  placeholders when the method names its data per input.
+  `search` and `@puddleworks/recipes` both read this.
+- `reads:` methods you know only read, as `"<extension> <method>"`, with no
+  wildcards. Recipes that call one answer at once; any other method asks first.
+  You are vouching for that method. Only this file can set it: a pack can't.
+- `recipes:` your own recipes, tried before those from packs.
 
-A captured piece must fit its declared shape before it becomes a method input
-(run with `--literal-inputs`). A bad entry, an unreadable file or a recipe for
-an extension that is not allowed is dropped and logged; the rest still applies.
+`@puddleworks/recipes` reads `reads:` and `recipes:`. Its README describes them.
 
-## Recipe packs
+## Recipes
 
-A pack is an extension labelled `puddlerouter-recipe` that holds one workflow
-per recipe. A fresh checkout gets its recipes with one run:
+puddlerouter has no recipes of its own. `match`, `execute` and `confirm` in the
+workflow are methods of [`@puddleworks/recipes`](https://swamp-club.com/extensions/@puddleworks/recipes),
+which holds the built-in git recipes and reads recipe packs: extensions labelled
+`puddlerouter-recipe`, one workflow per recipe. The runtime repo needs an
+instance of it named `recipes` (see [Set up](#set-up)). Without one, every turn
+still routes, but no recipe can answer.
+
+The first turn of each day (skipped turns included) starts
+`@puddleworks/recipes-sync` in the background, which pulls the packs and stores
+their recipes as an index. Until that index exists, only the built-in and local
+recipes match. It starts as the hook exits, because it holds the lock the turn's
+own workflow needs. A repeat sync takes about 9 seconds, and a first one with
+packs to pull about 15, so a turn typed straight after may give up at
+`PUDDLEROUTER_TIMEOUT` and go to Claude as normal. A sync that fails waits for the
+next day; to run it by hand:
 
 ```sh
-swamp workflow run @puddleworks/puddlerouter-recipes-sync
+swamp workflow run @puddleworks/recipes-sync
 ```
-
-`sync` searches the registry by that label, pulls each pack the allowlist
-covers (a pack's name is checked like an extension's) when it is missing or
-older than the registry's, and stores the checked recipes as `recipe-index`.
-`match` and `execute` read the index; they never pull. Order of matching: your
-`puddlerouter.yaml` recipes, then pack recipes, then the built-in ones. On an
-id clash the first wins and the clash is logged. An index older than a day is
-still used, with a log line. The workflow's daily schedule only fires under
-`swamp serve`; otherwise run it by hand.
-
-To write a pack, make a workflow per recipe with `name:
-"@<collective>/<pack>-<recipe>"` and one `model_method` step. The
-`puddlerouterRecipe` tag is the recipe as JSON: `id`, `extension` (the extension
-that holds the model type), `pattern`, `dataName`, `inputs`, `each`, `template`,
-`empty`, `cacheFor` (same meaning as a local recipe). The step gives the method
-(`methodName`), the definition (`modelIdOrName`) and the fixed inputs; each
-capture must be fed by a step input written `${{ inputs.<same name> }}`. A
-workflow with more than one step, a step that is not a `model_method`, an
-undeclared input or a recipe for an extension that is not allowed is dropped
-and listed in the index's `errors`. puddlerouter runs the method itself with
-`--literal-inputs`, not the workflow, so the workflow is also a way to run the
-same call by hand. See `puddle-works/puddlerouter-recipes-github`.
 
 ## Merged turns
 
@@ -199,9 +196,8 @@ as the last fetch, and the steps suggest deleting the remote branch even if
 GitHub already did.
 
 puddlerouter will not do these steps itself. The cleanup becomes its own
-request in Capture and its own extension, and a write recipe will call it
-(puddle-works/puddlerecipes#3). See `docs/puddlerouter.md` ("Where write
-recipes go").
+request in Capture and its own extension, and a write recipe will call it. See
+`docs/puddlerouter.md` ("Where write recipes go").
 
 
 ## Caches
@@ -214,8 +210,8 @@ A repeated turn makes no Jev call and no search subprocess:
   `extensions/models/puddlerouter.ts`.
 - **Search cache** (1 day, by query): what `model type search` and `extension
   search` found. A newly pulled extension may not show for up to a day.
-- **Result cache** (opt-in): a local recipe with `cacheFor: 30s`, `5m` or `1h`
-  reuses its last successful answer for that long. No built-in recipe does.
+- **Result cache** (opt-in): a recipe with `cacheFor: 30s`, `5m` or `1h` reuses
+  its last successful answer for that long, kept by `@puddleworks/recipes`.
 
 ## Capture requests
 
@@ -277,8 +273,11 @@ The runtime repo is the clone at `~/dev/puddlerouter`.
 cd ~/dev/puddlerouter
 swamp extension install                          # @swamp/typesafe-ai, pinned
 swamp vault put typesafe TYPESAFE_API_KEY        # the Jev key
+swamp workflow run @puddleworks/recipes-sync     # first index of recipe packs
 make test
 ```
+
+This repo already holds the `recipes` instance the workflow needs.
 
 Then add the hook to `~/.claude/settings.json` under `hooks.UserPromptSubmit`:
 
@@ -298,8 +297,9 @@ Hook settings (environment): `PUDDLEROUTER=off` skips every turn;
 `PUDDLEROUTER_MODE=live|shadow` (default `live`); `PUDDLEROUTER_REPO`, the swamp
 repo puddlerouter runs in and logs Capture requests in (default
 `~/dev/puddlerouter`); `PUDDLEROUTER_TIMEOUT` seconds to wait for swamp
-(default 15); `PUDDLEROUTER_KEY_CHECK=off` skips the daily key check, whose day stamp
-is kept in `PUDDLEROUTER_STATE` (default `~/.local/state/puddlerouter`).
+(default 15); `PUDDLEROUTER_KEY_CHECK=off` skips the daily key check and
+`PUDDLEROUTER_RECIPES_SYNC=off` the daily recipes sync, whose day stamps are kept
+in `PUDDLEROUTER_STATE` (default `~/.local/state/puddlerouter`).
 Start a turn with `llm:` to skip the router for that turn, or with `capture:`
 to log it straight in Capture without asking Jev (see
 [Capture requests](#capture-requests)).
@@ -314,6 +314,7 @@ not in the extension, so keep this clone for `hooks/puddlerouter.sh`.
 ```sh
 mkdir ~/dev/puddleworks-desk && cd ~/dev/puddleworks-desk
 swamp repo init .
+swamp extension pull @puddleworks/recipes --channel beta   # on the beta channel for now
 swamp extension pull @puddleworks/puddlerouter   # also pulls @puddleworks/capture, @swamp/git, @webframp/github
 swamp extension pull @swamp/typesafe-ai          # Jev
 swamp vault create local_encryption typesafe
@@ -329,11 +330,13 @@ swamp behavior create @puddleworks/capture/requests capture \
   --global-arg appUrl=http://127.0.0.1:3002 \
   --global-arg defaultAs=intake-bot@example.com
 swamp behavior create @puddleworks/capture/web viewer
+swamp behavior create @puddleworks/recipes recipes
 swamp behavior run capture add_person \
   --input email=intake-bot@example.com --input 'name=Intake Bot'
 
 cp ~/dev/puddlerouter/puddlerouter.example.yaml puddlerouter.yaml
 echo /puddlerouter.yaml >> .gitignore
+swamp workflow run @puddleworks/recipes-sync     # first index of recipe packs
 ```
 
 To bring over requests already logged in another repo, run

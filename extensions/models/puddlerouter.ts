@@ -16,21 +16,9 @@
  * @module
  */
 import { z } from "npm:zod@4";
-import {
-  type Config,
-  loadConfig,
-  parseConfig,
-  parseRecipe,
-} from "./_lib/config.ts";
-import { syncPacks } from "./_lib/packs.ts";
+import { type Config, loadConfig, parseConfig } from "./_lib/config.ts";
 import { allowPredicate } from "./_lib/allowlist.ts";
-import {
-  type Exec,
-  matchRecipe,
-  RECIPES,
-  runRecipe,
-  searchQuery,
-} from "./_lib/recipes.ts";
+import { type Exec, searchQuery } from "./_lib/search.ts";
 import {
   checkMerged,
   matchMerged,
@@ -91,32 +79,21 @@ export const TurnSchema = z.object({
 /** The stored turn. */
 export type Turn = z.infer<typeof TurnSchema>;
 
-/** Arguments for `match`. */
-export const MatchArgsSchema = z.object({
+/** Arguments for `search`. */
+export const SearchArgsSchema = z.object({
   text: z.string().describe("The cleaned turn text."),
   sourceRef: z.string().optional().describe(
     "The turn's sourceRef; the key of the Capture request logged for it.",
   ),
   repoDir: z.string().min(1).default(".").describe(
-    "The runtime repo; its puddlerouter.yaml adds allowlist entries and recipes.",
+    "The runtime repo; its puddlerouter.yaml adds allowlist entries.",
   ),
   capture: z.boolean().optional().describe(
-    "The turn had a capture: prefix: skip recipes and search, draft the request as is.",
+    "The turn had a capture: prefix: skip the search, draft the request as is.",
   ),
 });
-/** The arguments `match` accepts. */
-export type MatchArgs = z.infer<typeof MatchArgsSchema>;
-
-/** Arguments for `execute`. */
-export const ExecuteArgsSchema = z.object({
-  recipeId: z.string().min(1),
-  captures: z.array(z.string()).default([]),
-  repoDir: z.string().min(1).default(".").describe(
-    "The swamp repo the recipe's extension is pulled into.",
-  ),
-});
-/** The arguments `execute` accepts. */
-export type ExecuteArgs = z.infer<typeof ExecuteArgsSchema>;
+/** The arguments `search` accepts. */
+export type SearchArgs = z.infer<typeof SearchArgsSchema>;
 
 const CandidatesSchema = z.array(
   z.object({ name: z.string(), description: z.string() }),
@@ -154,37 +131,11 @@ export const RouteCacheSchema = z.object({
 /** One route cache entry. */
 export type RouteCache = z.infer<typeof RouteCacheSchema>;
 
-/** The searched extensions `match` keeps for a day. */
+/** The searched extensions `search` keeps for a day. */
 export const SearchCacheSchema = z.object({
   found: CandidatesSchema,
   cachedAt: z.iso.datetime(),
 });
-
-/** A successful recipe answer kept for the recipe's `cacheFor`. */
-export const ResultCacheSchema = z.object({
-  text: z.string(),
-  cachedAt: z.iso.datetime(),
-});
-
-/** The recipes of the synced packs, as `sync` leaves them for `match`. */
-export const RecipeIndexSchema = z.object({
-  recipes: z.array(z.object({
-    pack: z.string(),
-    recipe: z.record(z.string(), z.unknown()),
-  })),
-  packs: z.array(z.object({ name: z.string(), version: z.string() })),
-  errors: z.array(z.string()),
-  syncedAt: z.iso.datetime(),
-});
-
-/** Arguments for `sync`. */
-export const SyncArgsSchema = z.object({
-  repoDir: z.string().min(1).default(".").describe(
-    "The swamp repo the packs are pulled into; its puddlerouter.yaml sets the allowlist.",
-  ),
-});
-/** The arguments `sync` accepts. */
-export type SyncArgs = z.infer<typeof SyncArgsSchema>;
 
 /** Arguments for `merged`. */
 export const MergedArgsSchema = z.object({
@@ -238,11 +189,29 @@ export const ReplyArgsSchema = z.object({
     "A yes needs `yes` at or above this, a no at or below 1 minus this.",
   ),
   matchKind: z.enum(["recipe", "candidates", "none"]).optional().describe(
-    "The `match` step's kind; missing if it did not run.",
+    "recipe if the `match` step matched, else the `search` step's kind.",
   ),
   recipeId: z.string().optional().describe("The matched recipe's id."),
-  resultOk: z.boolean().optional().describe("True if the recipe ran."),
-  resultText: z.string().optional().describe("The recipe's answer."),
+  resultAction: z.string().optional().describe(
+    "What `execute` did: ran, ask, would-ask or none; empty if it did not run.",
+  ),
+  resultOk: z.boolean().optional().describe(
+    "True if `execute` gave an answer.",
+  ),
+  resultText: z.string().optional().describe(
+    "The recipe's answer, or the plan it asks about.",
+  ),
+  confirmAction: z.string().optional().describe(
+    "What `confirm` did with a plan: ran, refused or none; empty if it did not run.",
+  ),
+  confirmOk: z.boolean().optional().describe(
+    "True if the confirmed recipe ran.",
+  ),
+  confirmText: z.string().optional().describe("The confirmed recipe's answer."),
+  confirmError: z.string().optional().describe("Why `confirm` ran nothing."),
+  confirmRecipeId: z.string().optional().describe(
+    "The recipe the plan was for.",
+  ),
   candidates: z.array(z.object({ name: z.string(), description: z.string() }))
     .optional().describe("Extensions found by search, in c1, c2, c3 order."),
   pickChoice: z.string().optional().describe("Jev's pick: c1, c2, c3 or none."),
@@ -326,8 +295,6 @@ export const ROUTE_CACHE_VERSION = "v1";
 const DAY_MS = 24 * 3600 * 1000;
 const ROUTE_TTL_MS = 7 * DAY_MS;
 const SEARCH_TTL_MS = DAY_MS;
-/** The instance name of the one recipe index. */
-export const RECIPE_INDEX = "recipe-index";
 
 /** Where cache entries live: this model's own swamp resources. */
 export interface Store {
@@ -566,14 +533,11 @@ export function decisionText(answer: "yes" | "no", yes: number): string {
 const MAX_CANDIDATES = 3;
 const NO_CANDIDATE = "No such candidate.";
 
-/** What `match` stores. */
-export const MatchSchema = z.object({
-  /** recipe: a built-in recipe fits; candidates: search found extensions. */
-  kind: z.enum(["recipe", "candidates", "none"]),
-  recipeId: z.string(),
-  /** Digits the recipe's pattern captured. */
-  captures: z.array(z.string()),
-  /** The words searched for; empty for a recipe. */
+/** What `search` stores. */
+export const SearchSchema = z.object({
+  /** candidates: search found extensions; none: it found nothing allowed. */
+  kind: z.enum(["candidates", "none"]),
+  /** The words searched for. */
   query: z.string(),
   candidates: z.array(z.object({ name: z.string(), description: z.string() })),
   /** Criteria for Jev's pick: c1..c3 and none. */
@@ -583,25 +547,12 @@ export const MatchSchema = z.object({
   requestDescription: z.string(),
   /** Idempotency key: the turn's sourceRef, so one request per distinct turn. */
   requestKey: z.string(),
-  matchedAt: z.iso.datetime(),
+  searchedAt: z.iso.datetime(),
 });
-/** The stored match. */
-export type Match = z.infer<typeof MatchSchema>;
+/** The stored search. */
+export type Search = z.infer<typeof SearchSchema>;
 
-/** What `execute` stores. */
-export const ResultSchema = z.object({
-  recipeId: z.string(),
-  ok: z.boolean(),
-  text: z.string(),
-  error: z.string(),
-  /** True when the answer came from the result cache. */
-  cached: z.boolean(),
-  ranAt: z.iso.datetime(),
-});
-/** The stored result. */
-export type RecipeOutcome = z.infer<typeof ResultSchema>;
-
-function criteriaFor(candidates: Match["candidates"]): Record<string, string> {
+function criteriaFor(candidates: Search["candidates"]): Record<string, string> {
   const criteria: Record<string, string> = {};
   for (let i = 0; i < MAX_CANDIDATES; i++) {
     const c = candidates[i];
@@ -622,7 +573,7 @@ export function requestDraft(
   text: string,
   sourceRef: string,
   query: string,
-  candidates: Match["candidates"],
+  candidates: Search["candidates"],
 ): { title: string; description: string; key: string } {
   const oneLine = text.replace(/\s+/g, " ").trim();
   const title = `Recipe wanted: ${oneLine.slice(0, 80)}`;
@@ -643,15 +594,15 @@ export function requestDraft(
 }
 
 /**
- * The match for a turn sent with a capture: prefix: no recipe or search, and
+ * The search for a turn sent with a capture: prefix: nothing is searched, and
  * the request is the turn as typed. Capture shows the description as plain
  * text, so it has no Markdown.
  */
-export function captureMatch(
+export function captureSearch(
   text: string,
   sourceRef: string,
   now: Date = new Date(),
-): Match {
+): Search {
   const description = [
     text,
     "",
@@ -660,15 +611,13 @@ export function captureMatch(
   ].join("\n");
   return {
     kind: "none",
-    recipeId: "",
-    captures: [],
     query: "",
     candidates: [],
     criteria: criteriaFor([]),
     requestTitle: text.replace(/\s+/g, " ").trim().slice(0, 80),
     requestDescription: description,
     requestKey: sourceRef,
-    matchedAt: now.toISOString(),
+    searchedAt: now.toISOString(),
   };
 }
 
@@ -690,7 +639,7 @@ async function searchExtensions(
   exec: Exec,
   now: Date,
   store?: Store,
-): Promise<Match["candidates"]> {
+): Promise<Search["candidates"]> {
   const key = `search-${(await hex(query)).slice(0, 32)}`;
   try {
     const entry = SearchCacheSchema.safeParse(await store?.read(key));
@@ -733,165 +682,41 @@ async function searchExtensions(
 }
 
 /**
- * Find how to answer a deterministic turn: a built-in recipe, else the
- * extensions swamp finds for its content words. Search failing is not an error.
+ * The extensions swamp finds for a deterministic turn's content words, on the
+ * allowlist. Search failing is not an error.
  */
-export async function findMatch(
+export async function searchTurn(
   text: string,
   exec: Exec,
   now: Date = new Date(),
   sourceRef = "",
-  config: Pick<Config, "allowlist" | "recipes"> = parseConfig(""),
+  config: Pick<Config, "allowlist"> = parseConfig(""),
   store?: Store,
-): Promise<Match> {
+): Promise<Search> {
   const allow = allowPredicate(config.allowlist);
-  const draft = (query: string, candidates: Match["candidates"]) => {
-    const d = requestDraft(text, sourceRef, query, candidates);
-    return {
-      requestTitle: d.title,
-      requestDescription: d.description,
-      requestKey: d.key,
-    };
-  };
-  const base = {
-    recipeId: "",
-    captures: [] as string[],
-    query: "",
-    candidates: [] as Match["candidates"],
-    matchedAt: now.toISOString(),
-  };
-  const hit = matchRecipe(text, [...config.recipes, ...RECIPES]);
-  if (hit) {
-    return {
-      ...base,
-      kind: "recipe",
-      recipeId: hit.recipe.id,
-      captures: hit.captures,
-      criteria: criteriaFor([]),
-      ...draft("", []),
-    };
-  }
   const query = searchQuery(text);
-  if (!query) {
-    return {
-      ...base,
-      kind: "none",
-      criteria: criteriaFor([]),
-      ...draft("", []),
-    };
-  }
-  const found = await searchExtensions(query, exec, now, store);
+  const found = query ? await searchExtensions(query, exec, now, store) : [];
   const candidates = found.filter(({ name }) => allow(name)).slice(
     0,
     MAX_CANDIDATES,
   );
+  const d = requestDraft(text, sourceRef, query, candidates);
   return {
-    ...base,
     kind: candidates.length ? "candidates" : "none",
     query,
     candidates,
     criteria: criteriaFor(candidates),
-    ...draft(query, candidates),
+    requestTitle: d.title,
+    requestDescription: d.description,
+    requestKey: d.key,
+    searchedAt: now.toISOString(),
   };
 }
 
 /**
- * The config plus the recipes of the synced packs, after the local ones. A
- * missing index adds nothing; a stale one is still used. A pack recipe that
- * clashes, is no longer allowed or does not compile is dropped. `notes` says
- * what was off; `match` never pulls.
- */
-export async function withPacks(
-  config: Config,
-  store: Store,
-  now: Date = new Date(),
-): Promise<{ config: Config; notes: string[] }> {
-  const notes: string[] = [];
-  let raw: Record<string, unknown> | null = null;
-  try {
-    raw = await store.read(RECIPE_INDEX);
-  } catch { /* unreadable: no pack recipes */ }
-  if (raw === null) return { config, notes };
-  const index = RecipeIndexSchema.safeParse(raw);
-  if (!index.success) {
-    return { config, notes: ["recipe index is not valid; ignored"] };
-  }
-  if (!fresh(index.data.syncedAt, DAY_MS, now)) {
-    notes.push(
-      `recipe index is stale (synced ${index.data.syncedAt}); run the ` +
-        "puddlerouter-recipes-sync workflow",
-    );
-  }
-  const allowed = allowPredicate(config.allowlist);
-  const taken = new Set([...RECIPES, ...config.recipes].map((r) => r.id));
-  const recipes = [...config.recipes];
-  for (const { pack, recipe } of index.data.recipes) {
-    const parsed = parseRecipe(recipe, allowed, taken);
-    if ("error" in parsed) notes.push(`${pack}: ${parsed.error}`);
-    else recipes.push(parsed.recipe);
-  }
-  return { config: { ...config, recipes }, notes };
-}
-
-/** The result cache instance name for a recipe and its captures. */
-export async function resultCacheKey(
-  recipeId: string,
-  captures: string[],
-): Promise<string> {
-  return `result-${
-    (await hex([recipeId, ...captures].join("\0"))).slice(0, 32)
-  }`;
-}
-
-/**
- * Run the recipe with this id; an unknown id is a failed result. A recipe with
- * `cacheFor` reuses its last successful answer for that long.
- */
-export async function executeRecipe(
-  recipeId: string,
-  captures: string[],
-  exec: Exec,
-  repoDir: string,
-  config: Pick<Config, "allowlist" | "recipes"> = parseConfig(""),
-  store?: Store,
-  now: Date = new Date(),
-): Promise<{ ok: boolean; text: string; error: string; cached?: boolean }> {
-  const recipe = [...config.recipes, ...RECIPES].find((r) => r.id === recipeId);
-  if (!recipe) {
-    return { ok: false, text: "", error: `unknown recipe ${recipeId}` };
-  }
-  const key = store && recipe.cacheFor !== undefined
-    ? await resultCacheKey(recipeId, captures)
-    : "";
-  if (store && key) {
-    try {
-      const entry = ResultCacheSchema.safeParse(await store.read(key));
-      if (entry.success && fresh(entry.data.cachedAt, recipe.cacheFor!, now)) {
-        return { ok: true, text: entry.data.text, error: "", cached: true };
-      }
-    } catch { /* read failed: run it */ }
-  }
-  const result = await runRecipe(
-    { recipe, captures },
-    exec,
-    repoDir,
-    allowPredicate(config.allowlist),
-  );
-  if (store && key && result.ok) {
-    try {
-      await store.write("resultCache", key, {
-        text: result.text,
-        cachedAt: now.toISOString(),
-      });
-    } catch { /* not cached: the next turn runs it again */ }
-  }
-  return result;
-}
-
-/**
- * Runs the `swamp` on the path; used by `match` and `execute`. Arguments are
- * never joined into a shell line. Recipes pass fixed words and digits, and a
- * search passes at most four words of `[a-z0-9_-]` (see README, "Subprocesses").
+ * Runs the `swamp` on the path; used by `search`. Arguments are never joined
+ * into a shell line, and a search passes at most four words of `[a-z0-9_-]`
+ * (see README, "Subprocesses").
  */
 export const swampExec: Exec = async (args) => {
   // swamp-quality-ignore deno-command
@@ -913,6 +738,26 @@ export const swampExec: Exec = async (args) => {
 export function recipeText(recipeId: string, answer: string): string {
   return `${answer}\n\nAnswered by puddlerouter (recipe ${recipeId}) without ` +
     "Claude. To ask Claude instead, send the prompt again starting with llm:";
+}
+
+/** The text shown when a recipe that makes changes asks before it runs. */
+export function planText(recipeId: string, plan: string): string {
+  return `${plan}\n\nAsked by puddlerouter (recipe ${recipeId}) without Claude. ` +
+    "To ask Claude instead, send the prompt again starting with llm:";
+}
+
+/** The context added when a yes ran a recipe and the recipe failed. */
+export function confirmFailedHint(recipeId: string, error: string): string {
+  return `puddlerouter: the user said yes to recipe ${recipeId} and it ran, ` +
+    `but it failed: ${error}\nTell the user. Do not run it again unasked, ` +
+    "because it may have made some of its changes.";
+}
+
+/** The context added when a yes ran nothing. */
+export function confirmRefusedHint(recipeId: string, error: string): string {
+  return `puddlerouter: the user said yes to recipe ${recipeId}, but it did ` +
+    `not run: ${error}\nTell the user nothing changed. Do not make the change ` +
+    "yourself unless they ask.";
 }
 
 /**
@@ -966,9 +811,11 @@ export function buildReply(
   const choice = args.choice ?? "";
   const merged = args.mergedMatched === true;
   const capture = args.capture === true;
+  const confirmAction = args.confirmAction ?? "";
+  const confirmed = confirmAction === "ran" || confirmAction === "refused";
   const route: Reply["route"] = capture
     ? "capture"
-    : merged
+    : merged || confirmed
     ? "deterministic"
     : effectiveRoute(choice, args.confidence, args.cutoff);
   const complete = args.complete ?? false;
@@ -981,7 +828,24 @@ export function buildReply(
   let extension = "";
   let request = "";
   let reason: string;
-  if (capture) {
+  if (confirmed) {
+    const id = args.confirmRecipeId ?? "";
+    const error = args.confirmError ?? "";
+    recipe = id;
+    if (confirmAction === "refused") {
+      wouldAction = "hint";
+      text = confirmRefusedHint(id, error);
+      reason = `a yes ran nothing: ${error}`;
+    } else if (args.confirmOk && args.confirmText) {
+      wouldAction = "block";
+      text = recipeText(id, args.confirmText);
+      reason = `recipe ${id} answered after a yes`;
+    } else {
+      wouldAction = "hint";
+      text = confirmFailedHint(id, error);
+      reason = `recipe ${id} failed after a yes`;
+    }
+  } else if (capture) {
     if (args.mode === "shadow") {
       wouldAction = "block";
       reason = "capture: prefix, would log a request";
@@ -1011,7 +875,18 @@ export function buildReply(
     const candidate = picked ? args.candidates?.[Number(picked[1]) - 1] : null;
     if (args.matchKind === "recipe" && args.recipeId) {
       recipe = args.recipeId;
-      if (args.resultOk && args.resultText) {
+      const asks = args.resultAction === "ask" ||
+        args.resultAction === "would-ask";
+      if (asks && args.resultOk && args.resultText) {
+        wouldAction = "block";
+        text = planText(args.recipeId, args.resultText);
+        reason = args.resultAction === "ask"
+          ? `recipe ${args.recipeId} asked before running`
+          : `recipe ${args.recipeId} would ask before running`;
+      } else if (
+        !asks && args.resultAction !== "none" && args.resultOk &&
+        args.resultText
+      ) {
         wouldAction = "block";
         text = recipeText(args.recipeId, args.resultText);
         reason = `recipe ${args.recipeId} answered`;
@@ -1089,10 +964,18 @@ function resourceStore(context: MethodContext): Store {
   };
 }
 
-/** The model type: `load`, `match`, `execute`, `sync` and `reply`. */
+/** The model type: `load`, `recall`, `merged`, `search` and `reply`. */
 export const model = {
   type: "@puddleworks/puddlerouter",
-  version: "2026.10.13.2",
+  version: "2026.11.04.1",
+  upgrades: [
+    {
+      toVersion: "2026.11.04.1",
+      description:
+        "Recipes moved to @puddleworks/recipes; match became search. No settings changed.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   resources: {
     turn: {
@@ -1107,16 +990,10 @@ export const model = {
       lifetime: "14d" as const,
       garbageCollection: 2000,
     },
-    match: {
+    search: {
       description:
-        "How a deterministic turn can be answered: recipe or search.",
-      schema: MatchSchema,
-      lifetime: "14d" as const,
-      garbageCollection: 2000,
-    },
-    result: {
-      description: "What running a recipe gave.",
-      schema: ResultSchema,
+        "The extensions a search found for a deterministic turn, and the request to log.",
+      schema: SearchSchema,
       lifetime: "14d" as const,
       garbageCollection: 2000,
     },
@@ -1136,18 +1013,6 @@ export const model = {
       description: "Extensions a search found, kept 1 day.",
       schema: SearchCacheSchema,
       lifetime: "1d" as const,
-      garbageCollection: 1,
-    },
-    resultCache: {
-      description: "A recipe's answer, kept for the recipe's cacheFor.",
-      schema: ResultCacheSchema,
-      lifetime: "1d" as const,
-      garbageCollection: 1,
-    },
-    recipeIndex: {
-      description: "The recipes of the synced packs; `sync` writes it.",
-      schema: RecipeIndexSchema,
-      lifetime: "7d" as const,
       garbageCollection: 1,
     },
     merged: {
@@ -1196,109 +1061,40 @@ export const model = {
         return { dataHandles: [handle] };
       },
     },
-    match: {
+    search: {
       description:
-        "Match a turn to a built-in recipe, else search for extensions; store `match`.",
-      arguments: MatchArgsSchema,
-      execute: async (args: MatchArgs, context: MethodContext) => {
-        context.logger.info("Matching turn", {});
+        "Search for extensions that could answer a turn; store `search`.",
+      arguments: SearchArgsSchema,
+      execute: async (args: SearchArgs, context: MethodContext) => {
+        context.logger.info("Searching for turn", {});
         if (args.capture) {
-          const match = captureMatch(args.text, args.sourceRef ?? "");
-          const handle = await context.writeResource("match", "match", match);
-          context.logger.info("Matched capture: turn", {});
+          const search = captureSearch(args.text, args.sourceRef ?? "");
+          const handle = await context.writeResource(
+            "search",
+            "search",
+            search,
+          );
+          context.logger.info("Capture: turn, nothing searched", {});
           return { dataHandles: [handle] };
         }
-        const store = resourceStore(context);
-        const local = await loadConfig(args.repoDir);
-        if (local.errors.length) {
+        const config = await loadConfig(args.repoDir);
+        if (config.errors.length) {
           context.logger.info("puddlerouter.yaml: {errors}", {
-            errors: local.errors.join("; "),
+            errors: config.errors.join("; "),
           });
         }
-        const { config, notes } = await withPacks(local, store);
-        if (notes.length) {
-          context.logger.info("recipe packs: {notes}", {
-            notes: notes.join("; "),
-          });
-        }
-        const match = await findMatch(
+        const search = await searchTurn(
           args.text,
           swampExec,
           new Date(),
           args.sourceRef,
           config,
-          store,
+          resourceStore(context),
         );
-        const handle = await context.writeResource("match", "match", match);
-        context.logger.info("Matched {kind} {recipeId}", {
-          kind: match.kind,
-          recipeId: match.recipeId,
-        });
-        return { dataHandles: [handle] };
-      },
-    },
-    sync: {
-      description:
-        "Pull the recipe packs the allowlist covers and store their recipes as `recipeIndex`.",
-      arguments: SyncArgsSchema,
-      execute: async (args: SyncArgs, context: MethodContext) => {
-        context.logger.info("Syncing recipe packs", {});
-        const config = await loadConfig(args.repoDir);
-        const index = await syncPacks(
-          {
-            exec: swampExec,
-            readFile: (path) => Deno.readTextFile(path),
-            repoDir: args.repoDir,
-            now: new Date(),
-          },
-          allowPredicate(config.allowlist),
-        );
-        const handle = await context.writeResource(
-          "recipeIndex",
-          RECIPE_INDEX,
-          { ...index },
-        );
-        context.logger.info("Synced {packs} packs, {recipes} recipes", {
-          packs: index.packs.length,
-          recipes: index.recipes.length,
-        });
-        if (index.errors.length) {
-          context.logger.info("recipe packs: {errors}", {
-            errors: index.errors.join("; "),
-          });
-        }
-        return { dataHandles: [handle] };
-      },
-    },
-    execute: {
-      description: "Run a built-in recipe through swamp; store `result`.",
-      arguments: ExecuteArgsSchema,
-      execute: async (args: ExecuteArgs, context: MethodContext) => {
-        context.logger.info("Running recipe {recipeId}", {
-          recipeId: args.recipeId,
-        });
-        const store = resourceStore(context);
-        const { config } = await withPacks(
-          await loadConfig(args.repoDir),
-          store,
-        );
-        const r = await executeRecipe(
-          args.recipeId,
-          args.captures,
-          swampExec,
-          args.repoDir,
-          config,
-          store,
-        );
-        const handle = await context.writeResource("result", "result", {
-          recipeId: args.recipeId,
-          ...r,
-          cached: r.cached ?? false,
-          ranAt: new Date().toISOString(),
-        });
-        context.logger.info("Recipe {recipeId} ok {ok}", {
-          recipeId: args.recipeId,
-          ok: r.ok,
+        const handle = await context.writeResource("search", "search", search);
+        context.logger.info("Search {kind} for {query}", {
+          kind: search.kind,
+          query: search.query,
         });
         return { dataHandles: [handle] };
       },

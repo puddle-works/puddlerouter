@@ -21,6 +21,7 @@ for arg in "$@"; do
   case "$arg" in turnFile=*) cat "\${arg#turnFile=}" > "$log.turn" ;; esac
 done
 [ -n "\${FAKE_SWAMP_HANG:-}" ] && sleep 30
+case "$*" in *recipes-sync*) [ -n "\${FAKE_SWAMP_SYNC_HANG:-}" ] && sleep 30 ;; esac
 [ -n "\${FAKE_SWAMP_FAIL:-}" ] && { echo boom >&2; exit 1; }
 case "$1 $2" in
   "workflow run") echo '{"id":"run-1","status":"succeeded"}' ;;
@@ -94,6 +95,7 @@ async function runHook(
         FAKE_SWAMP_TEXT: "",
         TMPDIR: dir,
         PUDDLEROUTER_KEY_CHECK: "off",
+        PUDDLEROUTER_RECIPES_SYNC: "off",
         // Most tests check shadow mode; the default is live (step 5).
         PUDDLEROUTER_MODE: "shadow",
         ...env,
@@ -230,7 +232,7 @@ Deno.test("shadow mode runs the workflow with only the turn file's path", async 
   const call = run.calls[0];
   assertMatch(
     call,
-    /^workflow run @puddleworks\/puddlerouter --repo-dir \S+ --input turnFile=\/\S+ --input mode=shadow --input hookStartedAt=\d{13} --input repoDir=\S+ --json$/,
+    /^workflow run @puddleworks\/puddlerouter --repo-dir \S+ --input turnFile=\/\S+ --input mode=shadow --input hookStartedAt=\d{13} --input repoDir=\S+ --input sessionId=abc123 --json$/,
   );
   assert(
     !call.includes("fix stuff"),
@@ -334,7 +336,7 @@ Deno.test("live mode turns a block reply into a block decision", async () => {
   assertEquals(run.calls.length, 2);
   assertMatch(
     run.calls[0],
-    / --input mode=live --input hookStartedAt=\d{13} --input repoDir=\S+ --json$/,
+    / --input mode=live --input hookStartedAt=\d{13} --input repoDir=\S+ --input sessionId=abc123 --json$/,
   );
   assertEquals(
     run.calls[1],
@@ -410,6 +412,11 @@ Deno.test("live mode fails open with a note when swamp hangs past the timeout", 
   assert(run.ms < 4000, `took ${run.ms} ms`);
 });
 
+// A plan needs the very next turn to be a yes, so a typed turn the workflow
+// never sees still has to drop it.
+const DROP_PLAN =
+  /^behavior run recipes confirm --repo-dir (\S+) --input sessionId=abc123 --input text=\[skipped\] --input repoDir=\1$/;
+
 for (
   const [what, prompt, why] of [
     ["a slash command", "/review", "a /command"],
@@ -419,9 +426,12 @@ for (
   ]
 ) {
   Deno.test(`live mode notes that it skipped ${what}`, async () => {
-    const run = await runHook(prompt, { PUDDLEROUTER_MODE: "live" });
+    const run = await runHook(prompt, { PUDDLEROUTER_MODE: "live" }, {
+      waitForCall: true,
+    });
     assertEquals(liveNote(run).note, `puddlerouter: not routed (${why})`);
-    assertEquals(run.calls, []);
+    assertEquals(run.calls.length, 1);
+    assertMatch(run.calls[0], DROP_PLAN);
   });
 }
 
@@ -494,6 +504,165 @@ Deno.test("runs the key check at most once a day", async () => {
 });
 
 Deno.test("PUDDLEROUTER_KEY_CHECK=off skips the key check", async () => {
+  const state = await Deno.makeTempDir();
+  try {
+    const run = await runHook("/review", { PUDDLEROUTER_STATE: state });
+    assertSilentPass(run);
+    assertEquals(run.calls, []);
+  } finally {
+    await Deno.remove(state, { recursive: true });
+  }
+});
+
+// ---- the session id ----
+
+function stdinWith(sessionId: unknown): string {
+  return JSON.stringify({ session_id: sessionId, prompt: "list the open PRs" });
+}
+
+Deno.test("the session id reaches the workflow as an input", async () => {
+  const run = await runHook("list the open PRs", {}, { waitForSwamp: true });
+  assertMatch(run.calls[0], / --input sessionId=abc123 /);
+});
+
+for (
+  const [what, id] of [
+    ["an @ file reference", "@/etc/passwd"],
+    ["spaces", "a b"],
+    ["a flag", "--json x"],
+    ["129 characters", "a".repeat(129)],
+    ["a number", 42],
+    ["nothing", null],
+  ] as Array<[string, unknown]>
+) {
+  Deno.test(`a session id of ${what} is left out and the turn still runs`, async () => {
+    const run = await runHook(null, {}, {
+      stdin: stdinWith(id),
+      waitForSwamp: true,
+    });
+    assertEquals(run.calls.length, 2);
+    assert(!run.calls[0].includes("sessionId"), run.calls[0]);
+    assertEquals(run.turn, "list the open PRs");
+  });
+}
+
+Deno.test("a skipped turn does not wait for the plan to be dropped", async () => {
+  const run = await runHook("/review", {
+    PUDDLEROUTER_MODE: "live",
+    FAKE_SWAMP_HANG: "1",
+  }, { waitForCall: true });
+  assert(run.ms < 2000, `took ${run.ms} ms`);
+  assertEquals(
+    liveNote(run).note,
+    "puddlerouter: not routed (a /command)",
+  );
+});
+
+Deno.test("shadow mode drops no plan for a skipped turn", async () => {
+  const run = await runHook("/review");
+  assertEquals(run.calls, []);
+});
+
+Deno.test("a skipped turn with no session id has no plan to drop", async () => {
+  const run = await runHook(null, { PUDDLEROUTER_MODE: "live" }, {
+    stdin: JSON.stringify({ prompt: "/review" }),
+  });
+  assertEquals(liveNote(run).note, "puddlerouter: not routed (a /command)");
+  assertEquals(run.calls, []);
+});
+
+// ---- the daily recipes sync ----
+
+const RECIPES_SYNC =
+  /^workflow run @puddleworks\/recipes-sync --repo-dir (\S+) --input repoDir=\1$/;
+
+Deno.test("starts the recipes sync in the background on the first turn of the day", async () => {
+  const state = await Deno.makeTempDir();
+  try {
+    const run = await runHook("/review", {
+      PUDDLEROUTER_RECIPES_SYNC: "on",
+      PUDDLEROUTER_STATE: state,
+      FAKE_SWAMP_HANG: "1",
+    }, { waitForCall: true });
+    assertSilentPass(run);
+    assert(run.ms < 2000, `took ${run.ms} ms`);
+    assertEquals(run.calls.length, 1);
+    assertMatch(run.calls[0], RECIPES_SYNC);
+  } finally {
+    await Deno.remove(state, { recursive: true });
+  }
+});
+
+Deno.test("on a routed turn the sync starts after the workflow, so it cannot hold up the turn", async () => {
+  const state = await Deno.makeTempDir();
+  try {
+    const run = await runHook("open prs in a/b", {
+      PUDDLEROUTER_RECIPES_SYNC: "on",
+      PUDDLEROUTER_STATE: state,
+      PUDDLEROUTER_MODE: "live",
+      FAKE_SWAMP_REPLY: "block",
+      FAKE_SWAMP_TEXT: "No open pull requests.",
+      FAKE_SWAMP_SYNC_HANG: "1",
+    });
+    assertEquals(JSON.parse(run.stdout).reason, "No open pull requests.");
+    assert(run.ms < 2000, `took ${run.ms} ms`);
+    assertEquals(run.calls.length, 3);
+    assertMatch(run.calls[0], /^workflow run @puddleworks\/puddlerouter /);
+    assertMatch(run.calls[1], /^workflow history outputs /);
+    assertMatch(run.calls[2], RECIPES_SYNC);
+  } finally {
+    await Deno.remove(state, { recursive: true });
+  }
+});
+
+Deno.test("the sync still starts when the workflow fails", async () => {
+  const state = await Deno.makeTempDir();
+  try {
+    const run = await runHook("open prs in a/b", {
+      PUDDLEROUTER_RECIPES_SYNC: "on",
+      PUDDLEROUTER_STATE: state,
+      PUDDLEROUTER_MODE: "live",
+      FAKE_SWAMP_FAIL: "1",
+    });
+    assertEquals(run.calls.length, 2);
+    assertMatch(run.calls[1], RECIPES_SYNC);
+  } finally {
+    await Deno.remove(state, { recursive: true });
+  }
+});
+
+Deno.test("runs the recipes sync at most once a day", async () => {
+  const state = await Deno.makeTempDir();
+  try {
+    const env = { PUDDLEROUTER_RECIPES_SYNC: "on", PUDDLEROUTER_STATE: state };
+    await runHook("/review", env, { waitForCall: true });
+    const again = await runHook("/review", env);
+    assertSilentPass(again);
+    assertEquals(again.calls, []);
+  } finally {
+    await Deno.remove(state, { recursive: true });
+  }
+});
+
+Deno.test("the key check and the recipes sync keep separate day stamps", async () => {
+  const state = await Deno.makeTempDir();
+  try {
+    await runHook("/review", {
+      PUDDLEROUTER_KEY_CHECK: "on",
+      PUDDLEROUTER_STATE: state,
+    }, { waitForCall: true });
+    const run = await runHook("/review", {
+      PUDDLEROUTER_RECIPES_SYNC: "on",
+      PUDDLEROUTER_STATE: state,
+    }, { waitForCall: true });
+    assertEquals(run.calls.length, 1);
+    assertMatch(run.calls[0], RECIPES_SYNC);
+  } finally {
+    await Deno.remove(state, { recursive: true });
+  }
+});
+
+Deno.test("PUDDLEROUTER_RECIPES_SYNC=off skips the sync", async () => {
   const state = await Deno.makeTempDir();
   try {
     const run = await runHook("/review", { PUDDLEROUTER_STATE: state });
