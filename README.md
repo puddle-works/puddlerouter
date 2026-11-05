@@ -2,7 +2,9 @@
 
 `@puddleworks/puddlerouter` checks each turn typed into Claude Code before
 Claude spends effort on it. A `UserPromptSubmit` hook hands the turn to a swamp
-workflow, and Jev (TypeSafe's System One model) picks a route:
+workflow. A phrase you listed goes straight to Claude and a whole-turn recipe
+match answers at once, so neither costs a Jev call. Anything else goes to Jev
+(TypeSafe's System One model), which picks a route:
 
 | Route           | Meaning                                                 | What happens (once built)                                                                                                                                                                                        |
 | --------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -35,6 +37,10 @@ prompt ─▶ hooks/puddlerouter.sh
                     placeholder and never sent to Jev; a leading "capture:"
                     is taken off and marks the turn for Capture (merged,
                     route and decide are skipped)
+             alwaysLlm the typed text matches a phrase under alwaysLlm: in
+                    puddlerouter.yaml: every step below up to reply is skipped,
+                    so the turn goes to Claude with no Jev call and nothing
+                    logged (a capture: or withheld turn never gets here)
              recall Jev's earlier route, decision and pick for this exact turn
                     (route cache, 7 days); route, decide and pick are skipped
                     for what it holds
@@ -43,13 +49,15 @@ prompt ─▶ hooks/puddlerouter.sh
                     reply; drop it otherwise (live mode with a session only)
              merged a turn that only says a PR merged ("merged", "12 is
                     merged"): check its worktree read-only and hint the steps
-                    to finish; route, decide and match are skipped
+                    to finish; match, route and decide are skipped
+             match  find a recipe (@puddleworks/recipes) whose pattern matches
+                    the whole turn; on a match, route, decide and search are
+                    skipped, so a recipe answers with no Jev call
              route  jev.choice over deterministic / decision / llm (cut-off 0.7)
              decide jev.noul, only for a decision turn with nothing pasted,
                     fenced or cut; yes at ≥ 0.8, no at ≤ 0.2, else unsure
-             match  deterministic turn: find a recipe (@puddleworks/recipes)
-             search no recipe: search extensions; capture: turn: the request
-                    draft, with no recipe or search
+             search deterministic turn with no recipe: search extensions;
+                    capture: turn: the request draft, with no recipe or search
              pick   jev.choice over up to 3 allowlisted candidates, or none
              execute run the recipe (@puddleworks/recipes), or show its plan if
                     it makes changes
@@ -70,6 +78,8 @@ example:
 > puddlerouter: sent to Claude (llm route at 0.98, 3.8 s)
 
 > puddlerouter: not routed (an llm: prefix)
+
+> puddlerouter: not routed (an always-LLM phrase)
 
 > puddlerouter: no answer within 15 s, so this went to Claude as normal
 
@@ -122,7 +132,7 @@ origin repo's `owner/name` as arguments.
 ## Local config
 
 `<repoDir>/puddlerouter.yaml` (gitignored; copy `puddlerouter.example.yaml`) has
-three optional keys. A bad entry or an unreadable file is dropped and logged; the
+four optional keys. A bad entry or an unreadable file is dropped and logged; the
 rest still applies.
 
 - `allow:` extra extension names or `@scope/*` scopes. They add to the defaults.
@@ -131,6 +141,12 @@ rest still applies.
   wildcards. Recipes that call one answer at once; any other method asks first.
   You are vouching for that method. Only this file can set it: a pack can't.
 - `recipes:` your own recipes, tried before those from packs.
+- `alwaysLlm:` patterns for phrases that must always go to Claude. Each is a
+  regular expression, case-insensitive, tried against the typed text with pasted
+  and fenced blocks taken out. It need not match the whole turn, so anchor it with
+  `^` to match only the start. A hit beats a cached route and a matching recipe.
+  It sends nothing to Jev, logs nothing in Capture, and is never taken as a yes to
+  a recipe's plan. A `capture:` turn is still logged, because you asked for that.
 
 `@puddleworks/recipes` reads `reads:` and `recipes:`. Its README describes them.
 

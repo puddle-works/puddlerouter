@@ -100,13 +100,9 @@ Deno.test("reply runs after decide whatever happened and gets its answer", async
   assert(inputs.answerCutoff.includes("inputs.answerCutoff"));
 });
 
-Deno.test("match, search, pick and execute only run for the deterministic route and its match", async () => {
+Deno.test("search, pick and execute only run for the deterministic route and its match", async () => {
   const wf = "workflow-puddlerouter.yaml";
   const guards: Record<string, string[]> = {
-    match: [
-      'steps.route.outputs.choice == "deterministic"',
-      "steps.route.outputs.confidence >= inputs.cutoff",
-    ],
     search: [
       'steps.route.outputs.choice == "deterministic"',
       "steps.match.outputs.matched",
@@ -529,4 +525,84 @@ Deno.test("reply knows the turn had a capture: prefix", async () => {
   const step = await stepOf("workflow-puddlerouter.yaml", "reply");
   const inputs = step.task.inputs as Record<string, string>;
   assert(inputs.capture?.includes(CAPTURE));
+});
+
+const ALWAYS_LLM = "steps.alwaysLlm.outputs.matched";
+
+function alwaysDep(step: Step, on: string): boolean {
+  return step.dependsOn?.some((d) =>
+    d.step === on && d.condition.type === "always"
+  ) ?? false;
+}
+
+Deno.test("alwaysLlm runs right after load, never for an empty, withheld or capture: turn, and never blocks", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  const step = await stepOf(wf, "alwaysLlm");
+  assertEquals(step.task.modelIdOrName, "puddlerouter");
+  assertEquals(step.task.methodName, "alwaysLlm");
+  assertEquals(step.allowFailure, true);
+  assert(step.dependsOn?.some((d) => d.step === "load"));
+  const guard = step.guard ?? "";
+  for (const part of ["empty", "withheld", "capture"]) {
+    assert(guard.includes(`steps.load.outputs.${part}`), part);
+  }
+  const inputs = step.task.inputs as Record<string, string>;
+  assert(inputs.text.includes("steps.load.outputs.text"));
+  assert(inputs.repoDir.includes("inputs.repoDir"));
+});
+
+Deno.test("an always-LLM phrase skips everything but confirm and reply", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  for (const name of ["merged", "match", "route", "decide", "search"]) {
+    const step = await stepOf(wf, name);
+    assert((step.guard ?? "").includes(ALWAYS_LLM), `${name} guard lacks it`);
+    assert(alwaysDep(step, "alwaysLlm"), `${name} lacks an always dep`);
+  }
+  const confirm = await stepOf(wf, "confirm");
+  assert(!(confirm.guard ?? "").includes(ALWAYS_LLM));
+  assert(alwaysDep(confirm, "alwaysLlm"));
+  // A listed phrase is never a yes, so it drops the plan and runs nothing.
+  const inputs = confirm.task.inputs as Record<string, string>;
+  assert(inputs.text.includes(ALWAYS_LLM));
+});
+
+Deno.test("reply waits for alwaysLlm and gets its result", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "reply");
+  assert(alwaysDep(step, "alwaysLlm"));
+  const inputs = step.task.inputs as Record<string, string>;
+  assert(inputs.alwaysLlm?.includes(ALWAYS_LLM));
+});
+
+Deno.test("match runs before the route and does not look at it", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  const match = await stepOf(wf, "match");
+  const guard = match.guard ?? "";
+  assert(!guard.includes("steps.route"), "guard looks at the route");
+  assert(!guard.includes("steps.recall"), "guard looks at the cached route");
+  assert(!match.dependsOn?.some((d) => d.step === "route"));
+  for (
+    const part of [
+      "steps.load.outputs.empty",
+      "steps.load.outputs.withheld",
+      "steps.load.outputs.capture",
+      "steps.merged.outputs.matched",
+      'steps.confirm.outputs.action == "ran"',
+      ALWAYS_LLM,
+    ]
+  ) assert(guard.includes(part), `match guard lacks ${part}`);
+});
+
+Deno.test("a matched recipe skips route, decide and search, and a failed match does not", async () => {
+  const wf = "workflow-puddlerouter.yaml";
+  for (const name of ["route", "decide", "search"]) {
+    const step = await stepOf(wf, name);
+    assert(
+      (step.guard ?? "").includes(
+        "has(steps.match) && has(steps.match.outputs) && steps.match.outputs.matched",
+      ),
+      `${name} guard lacks the match, with has() so a failed match carries on`,
+    );
+    assert(alwaysDep(step, "match"), `${name} lacks an always dep on match`);
+  }
+  assertEquals((await stepOf(wf, "match")).allowFailure, true);
 });

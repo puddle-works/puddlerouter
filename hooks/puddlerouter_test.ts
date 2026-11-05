@@ -387,6 +387,18 @@ Deno.test("live mode notes a pass reply without a confidence", async () => {
   );
 });
 
+Deno.test("live mode notes an always-LLM phrase like an llm: prefix", async () => {
+  const run = await runHook("load the handover doc at /tmp/x.md", {
+    PUDDLEROUTER_MODE: "live",
+    FAKE_SWAMP_REPLY: "pass",
+    FAKE_SWAMP_REASON: "not routed (an always-LLM phrase)",
+  });
+  assertEquals(
+    liveNote(run).note,
+    "puddlerouter: not routed (an always-LLM phrase)",
+  );
+});
+
 Deno.test("live mode fails open with a note when swamp fails", async () => {
   const run = await runHook("is this ok?", {
     PUDDLEROUTER_MODE: "live",

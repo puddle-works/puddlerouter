@@ -1029,3 +1029,63 @@ Run in a worktree with the route seeded, because it has no Jev key.
 | No `recipes` instance | the hook passes: `match` fails and `search` runs |
 
 A repeat sync takes about 9 s, and a first one with packs to pull 12 to 17 s.
+
+## Phrases and recipes before Jev (issues #52 and #53)
+
+On 2026-11-05 two steps moved ahead of `route`, and the workflow order became
+`load`, `alwaysLlm`, `recall`, `confirm`, `merged`, `match`, `route`, `decide`,
+`search`, `pick`, `execute`, `raise`, `reply`. The sections above describe the
+old order, where `match` ran only on a turn Jev had already called
+`deterministic`.
+
+### Decisions
+
+1. **The owner lists phrases that always go to Claude.** Some turns must reach
+   Claude however they read, such as loading a handover doc. `alwaysLlm:` in
+   `puddlerouter.yaml` holds the patterns. A hit skips everything up to `reply`,
+   including a cached route and a matching recipe, and `reply` records the turn
+   as `llm` with the reason `not routed (an always-LLM phrase)`.
+2. **`capture:` and a withheld turn come first.** A `capture:` turn matching the
+   list is still logged, because the owner asked for that. A turn that looks like
+   it holds a secret is never tested against the list.
+3. **A listed phrase is never a yes.** The `confirm` step gets a fixed text on a
+   hit, so a plan from the last turn is dropped.
+4. **A recipe match no longer needs Jev.** Since `@puddleworks/recipes`
+   `2026.11.05.1` a pattern must match the whole turn and a catch-all is refused,
+   so a match is safe to act on. `route`, `decide` and `search` are skipped on a
+   match. A failed `match` step leaves its outputs absent and the turn routes as
+   before. `reply` reports these turns as `deterministic`, and a skipped route
+   reports no confidence rather than 0.
+5. **Splitting a turn stays out.** A turn holding a recipe's phrase and something
+   else doesn't match, and goes to Jev as today. That is issue #25.
+
+### Checks before going live
+
+`match` on a turn with no recipe took 18 ms in a worktree run, and 20, 28 and
+13 ms in a repo with a synced recipe index.
+
+Turns run through today's patterns (`github-open-prs`, `swamp-extension-checker-licence`,
+`git-status`, `git-log` and `git-branch`):
+
+| Sample | Turns | Match a recipe |
+| --- | --- | --- |
+| `docs/route-eval/turns.yaml` | 36 | 0 |
+| Real turns in one repo's log | 253 (216 distinct) | 1 distinct: "open prs in puddle-works/puddlerouter", `github-open-prs` |
+
+The log's replies show that recipe had already answered at least twice, so the
+sample shows no turn clearly changing route. Stored turns and replies aren't
+paired one to one, so this is not proof for every turn.
+
+### Shadow runs (real workflow, 2026-11-05)
+
+| Turn | Steps that ran | Result |
+| --- | --- | --- |
+| "load the handover doc at /tmp/x.md" | `load`, `alwaysLlm`, `recall`, `reply` | `llm`, no confidence, `shadow: not routed (an always-LLM phrase)` (1251 ms) |
+| "load the handover doc now", also matching a local recipe | the same | the same; the recipe did not run (1243 ms) |
+| "git status" | `match` and `execute` ran, `route` skipped | `deterministic`, `git-status`, would block (3844 ms) |
+| "capture: load the handover doc at /tmp/x.md" | `alwaysLlm` and `match` skipped, `search` ran | `capture`, `shadow: capture: prefix, would log a request` (1212 ms) |
+| "my password = hunter2hunter2" | `alwaysLlm`, `merged`, `match` and `route` skipped | `shadow: no route answer` (1188 ms) |
+| "refactor the reply method so it reads better" | `match` found nothing, `route` failed (the worktree has no Jev key) | `shadow: no route answer` (1311 ms) |
+
+The last row means a miss followed by a real Jev answer was not run here. Unit
+and workflow tests cover it.

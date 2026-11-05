@@ -2,9 +2,10 @@
  * @puddleworks/puddlerouter — decides what happens to a turn typed into Claude Code
  *
  * The `puddlerouter` workflow runs these methods for each turn the hook hands
- * over: `load` reads the turn file and stores the cleaned text, Jev picks a
- * route, Jev answers a yes/no question on the decision route, and `reply`
- * turns the route into what the hook should do.
+ * over: `load` reads the turn file and stores the cleaned text, `alwaysLlm`
+ * checks the phrases that always go to Claude, and a recipe is tried. Only if
+ * none matched does Jev pick a route and answer a yes/no question on the
+ * decision route. `reply` turns all that into what the hook should do.
  *
  * In live mode a confident yes or no blocks the turn with Jev's answer, so
  * Claude does not run. In shadow mode every reply passes, so Claude runs as
@@ -153,6 +154,24 @@ export const MergedSchema = MergedCheckSchema.extend({
   checkedAt: z.iso.datetime(),
 });
 
+/** Arguments for `alwaysLlm`. */
+export const AlwaysLlmArgsSchema = z.object({
+  text: z.string().describe("The cleaned turn text."),
+  repoDir: z.string().min(1).default(".").describe(
+    "The runtime repo; its puddlerouter.yaml lists the phrases.",
+  ),
+});
+/** The arguments `alwaysLlm` accepts. */
+export type AlwaysLlmArgs = z.infer<typeof AlwaysLlmArgsSchema>;
+
+/** What `alwaysLlm` stores: whether a listed phrase matched, and which. */
+export const AlwaysLlmSchema = z.object({
+  matched: z.boolean(),
+  /** The pattern that matched; empty if none did. */
+  pattern: z.string(),
+  checkedAt: z.iso.datetime(),
+});
+
 /** Arguments for `recall`. */
 export const RecallArgsSchema = z.object({
   sourceRef: z.string().describe("The turn's sourceRef; the route cache key."),
@@ -168,6 +187,9 @@ export const ReplyArgsSchema = z.object({
   sourceRef: z.string().describe("The turn's sourceRef."),
   capture: z.boolean().optional().describe(
     "The turn had a capture: prefix, so it goes to Capture whatever Jev or the cache says.",
+  ),
+  alwaysLlm: z.boolean().optional().describe(
+    "The turn matched a listed phrase, so it goes to Claude whatever a recipe or the cache says.",
   ),
   choice: z.string().optional().describe(
     "Jev's route; empty or missing when the route step did not answer.",
@@ -280,6 +302,21 @@ export const ReplySchema = z.object({
 });
 /** The stored reply. */
 export type Reply = z.infer<typeof ReplySchema>;
+
+/**
+ * The first `alwaysLlm` pattern that matches what was typed, or "". Pasted and
+ * fenced blocks don't count, and whitespace is collapsed.
+ */
+export function alwaysLlmHit(text: string, patterns: RegExp[]): string {
+  const typed = text
+    .replace(/\[(?:pasted text|code block)\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return patterns.find((re) => re.test(typed))?.source ?? "";
+}
+
+/** Why an `alwaysLlm` turn passed; the hook shows it as the turn's note. */
+export const ALWAYS_LLM_REASON = "not routed (an always-LLM phrase)";
 
 /** Lowercase, trim and collapse whitespace, so trivial edits hash the same. */
 export function normalise(text: string): string {
@@ -813,10 +850,16 @@ export function buildReply(
   const capture = args.capture === true;
   const confirmAction = args.confirmAction ?? "";
   const confirmed = confirmAction === "ran" || confirmAction === "refused";
+  const alwaysLlm = args.alwaysLlm === true;
+  const recipeId = !alwaysLlm && args.matchKind === "recipe"
+    ? args.recipeId ?? ""
+    : "";
   const route: Reply["route"] = capture
     ? "capture"
-    : merged || confirmed
+    : merged || confirmed || recipeId
     ? "deterministic"
+    : alwaysLlm
+    ? "llm"
     : effectiveRoute(choice, args.confidence, args.cutoff);
   const complete = args.complete ?? false;
   const answerCutoff = args.answerCutoff ?? 0.8;
@@ -867,31 +910,32 @@ export function buildReply(
       text = args.mergedText;
       reason = `merged: ${args.mergedSummary ?? ""}`;
     } else reason = `merged check failed: ${args.mergedError ?? ""}`;
+  } else if (alwaysLlm) reason = ALWAYS_LLM_REASON;
+  else if (recipeId) {
+    recipe = recipeId;
+    const asks = args.resultAction === "ask" ||
+      args.resultAction === "would-ask";
+    if (asks && args.resultOk && args.resultText) {
+      wouldAction = "block";
+      text = planText(recipeId, args.resultText);
+      reason = args.resultAction === "ask"
+        ? `recipe ${recipeId} asked before running`
+        : `recipe ${recipeId} would ask before running`;
+    } else if (
+      !asks && args.resultAction !== "none" && args.resultOk &&
+      args.resultText
+    ) {
+      wouldAction = "block";
+      text = recipeText(recipeId, args.resultText);
+      reason = `recipe ${recipeId} answered`;
+    } else reason = `recipe ${recipeId} failed`;
   } else if (!choice) reason = "no route answer";
   else if (route !== choice) reason = "confidence below cut-off";
   else if (route === "llm") reason = "llm route";
   else if (route === "deterministic") {
     const picked = /^c([1-9])$/.exec(args.pickChoice ?? "");
     const candidate = picked ? args.candidates?.[Number(picked[1]) - 1] : null;
-    if (args.matchKind === "recipe" && args.recipeId) {
-      recipe = args.recipeId;
-      const asks = args.resultAction === "ask" ||
-        args.resultAction === "would-ask";
-      if (asks && args.resultOk && args.resultText) {
-        wouldAction = "block";
-        text = planText(args.recipeId, args.resultText);
-        reason = args.resultAction === "ask"
-          ? `recipe ${args.recipeId} asked before running`
-          : `recipe ${args.recipeId} would ask before running`;
-      } else if (
-        !asks && args.resultAction !== "none" && args.resultOk &&
-        args.resultText
-      ) {
-        wouldAction = "block";
-        text = recipeText(args.recipeId, args.resultText);
-        reason = `recipe ${args.recipeId} answered`;
-      } else reason = `recipe ${args.recipeId} failed`;
-    } else if (
+    if (
       args.matchKind === "candidates" && candidate &&
       (args.pickConfidence ?? 0) >= args.cutoff
     ) {
@@ -925,7 +969,7 @@ export function buildReply(
     mode: args.mode,
     route,
     choice,
-    confidence: args.confidence ?? null,
+    confidence: choice ? args.confidence ?? null : null,
     cutoff: args.cutoff,
     answer,
     yes,
@@ -964,15 +1008,21 @@ function resourceStore(context: MethodContext): Store {
   };
 }
 
-/** The model type: `load`, `recall`, `merged`, `search` and `reply`. */
+/** The model type: `load`, `alwaysLlm`, `recall`, `merged`, `search` and `reply`. */
 export const model = {
   type: "@puddleworks/puddlerouter",
-  version: "2026.11.04.1",
+  version: "2026.11.05.1",
   upgrades: [
     {
       toVersion: "2026.11.04.1",
       description:
         "Recipes moved to @puddleworks/recipes; match became search. No settings changed.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.05.1",
+      description:
+        "Recipes are tried before Jev, and alwaysLlm phrases go straight to Claude. No settings changed.",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -1022,8 +1072,38 @@ export const model = {
       lifetime: "14d" as const,
       garbageCollection: 2000,
     },
+    alwaysLlm: {
+      description:
+        "Whether the turn matched a phrase that always goes to Claude.",
+      schema: AlwaysLlmSchema,
+      lifetime: "14d" as const,
+      garbageCollection: 2000,
+    },
   },
   methods: {
+    alwaysLlm: {
+      description:
+        "Check the turn against the alwaysLlm list in puddlerouter.yaml; store `alwaysLlm`.",
+      arguments: AlwaysLlmArgsSchema,
+      execute: async (args: AlwaysLlmArgs, context: MethodContext) => {
+        const config = await loadConfig(args.repoDir);
+        if (config.errors.length) {
+          context.logger.info("puddlerouter.yaml: {errors}", {
+            errors: config.errors.join("; "),
+          });
+        }
+        const pattern = alwaysLlmHit(args.text, config.alwaysLlm);
+        const handle = await context.writeResource("alwaysLlm", "alwaysLlm", {
+          matched: pattern !== "",
+          pattern,
+          checkedAt: new Date().toISOString(),
+        });
+        context.logger.info("Always-LLM pattern: {pattern}", {
+          pattern: pattern || "none",
+        });
+        return { dataHandles: [handle] };
+      },
+    },
     merged: {
       description:
         "If the turn only says a PR merged, check the PR and its worktree " +
@@ -1142,7 +1222,10 @@ export const model = {
           sourceRef: args.sourceRef,
         });
         const { recalled, ...fresh } = args;
-        const merged = withRecall(fresh, recalled);
+        // These turns never reached Jev, so an earlier answer has no say.
+        const notRouted = args.alwaysLlm === true ||
+          (args.matchKind === "recipe" && Boolean(args.recipeId));
+        const merged = withRecall(fresh, notRouted ? undefined : recalled);
         const reply = buildReply({
           ...merged.args,
           mode: args.mode ?? "shadow",
