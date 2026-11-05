@@ -703,9 +703,8 @@ here) was not run with real Jev.
 This code and workflow have moved to `@puddleworks/recipes`. See
 [Recipes move out](#recipes-move-out-issue-49).
 
-The first pack is `@puddleworks/puddlerouter-recipes-github` (repo
-`puddle-works/puddlerouter-recipes-github`, private, label `puddlerouter-recipe`),
-one workflow per recipe. See the README, "Recipe packs", for the format.
+The first pack is `@puddleworks/puddlerouter-recipes-github` (private, label
+`puddlerouter-recipe`), one workflow per recipe. See the README, "Recipe packs", for the format.
 
 ### Live checks of step 0 (closes check 4a)
 
