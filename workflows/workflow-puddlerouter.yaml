@@ -2,12 +2,14 @@ id: 9366b226-da00-46dc-9a1c-1e6ad0d4c39d
 name: "@puddleworks/puddlerouter"
 description: >-
   Route one turn typed into Claude Code. The hook writes the turn to a temp
-  file and passes only its path. load cleans and hashes the text. confirm runs
-  a plan the last turn showed if this turn is only a yes, and drops it
-  otherwise. Jev picks a route, Jev answers the yes/no question on the decision
-  route, and on the deterministic route @puddleworks/recipes matches a recipe
-  and runs it, or asks first if it makes changes. If none matches, search finds
-  extensions for Jev to pick from. reply stores what the hook should do. In live
+  file and passes only its path. load cleans and hashes the text. alwaysLlm
+  sends a phrase listed in puddlerouter.yaml straight to Claude. confirm runs a
+  plan the last turn showed if this turn is only a yes, and drops it otherwise.
+  @puddleworks/recipes then tries to match a recipe, whatever Jev would say, and
+  runs it, or asks first if it makes changes. Only if none matches does Jev pick
+  a route and answer the yes/no question on the decision route, and on the
+  deterministic route search finds extensions for Jev to pick from. reply stores
+  what the hook should do. In live
   mode a confident answer blocks the turn with Jev's or the recipe's answer, and
   a deterministic turn nothing can answer logs one request in Capture (live mode
   only; one per distinct turn). A turn that only says a PR merged skips Jev: the
@@ -66,7 +68,7 @@ inputs:
   required: [turnFile]
 jobs:
   - name: main
-    description: load, recall, confirm, merged, route, decide, match, search, pick, execute, raise, reply.
+    description: load, alwaysLlm, recall, confirm, merged, match, route, decide, search, pick, execute, raise, reply.
     dependsOn: []
     weight: 0
     steps:
@@ -81,6 +83,26 @@ jobs:
           methodName: load
           inputs:
             turnFile: ${{ inputs.turnFile }}
+      - name: alwaysLlm
+        description: >-
+          Check the turn against the alwaysLlm list in puddlerouter.yaml. A hit
+          goes straight to Claude: only confirm and reply still run. Skipped for
+          an empty or withheld turn and a capture: turn, which goes to Capture
+          whatever it says. A failure only loses the check.
+        dependsOn:
+          - step: load
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: true
+        guard: "${{ steps.load.outputs.empty || steps.load.outputs.withheld || steps.load.outputs.capture }}"
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: alwaysLlm
+          inputs:
+            text: ${{ steps.load.outputs.text }}
+            repoDir: ${{ inputs.repoDir }}
       - name: recall
         description: >-
           Read Jev's earlier route, decision and pick for this exact turn from
@@ -100,12 +122,16 @@ jobs:
       - name: confirm
         description: >-
           If the last turn in this session showed a plan, run it when this turn
-          is only a yes and drop it otherwise. A capture: turn is never a yes.
-          Skipped in shadow mode, which never keeps a plan, and with no session.
+          is only a yes and drop it otherwise. A capture: turn or a phrase on
+          the alwaysLlm list is never a yes. Skipped in shadow mode, which never
+          keeps a plan, and with no session.
         dependsOn:
           - step: load
             condition:
               type: succeeded
+          - step: alwaysLlm
+            condition:
+              type: always
         weight: 0
         allowFailure: true
         guard: '${{ inputs.mode != "live" || inputs.sessionId == "" }}'
@@ -115,37 +141,81 @@ jobs:
           methodName: confirm
           inputs:
             sessionId: ${{ inputs.sessionId }}
-            text: '${{ steps.load.outputs.capture ? "[capture]" : steps.load.outputs.text }}'
+            text: '${{ steps.load.outputs.capture ? "[capture]" : (has(steps.alwaysLlm) && has(steps.alwaysLlm.outputs) && steps.alwaysLlm.outputs.matched) ? "[always-llm]" : steps.load.outputs.text }}'
             repoDir: ${{ inputs.repoDir }}
       - name: merged
         description: >-
           If the turn only says a PR merged ("merged", "12 is merged"), check
           the PR and the worktree it was built in, read-only, and store the
           steps to finish. Jev and the recipes are then skipped. Skipped for an
-          empty, withheld or capture: turn and for a yes confirm handled; a
-          failure only loses the hint.
+          empty, withheld or capture: turn, a phrase on the alwaysLlm list and a
+          yes confirm handled; a failure only loses the hint.
         dependsOn:
           - step: load
             condition:
               type: succeeded
+          - step: alwaysLlm
+            condition:
+              type: always
           - step: confirm
             condition:
               type: always
         weight: 0
         allowFailure: true
-        guard: '${{ steps.load.outputs.empty || steps.load.outputs.withheld || steps.load.outputs.capture || (has(steps.confirm) && has(steps.confirm.outputs) && (steps.confirm.outputs.action == "ran" || steps.confirm.outputs.action == "refused")) }}'
+        guard: '${{ steps.load.outputs.empty || steps.load.outputs.withheld || steps.load.outputs.capture || (has(steps.alwaysLlm) && has(steps.alwaysLlm.outputs) && steps.alwaysLlm.outputs.matched) || (has(steps.confirm) && has(steps.confirm.outputs) && (steps.confirm.outputs.action == "ran" || steps.confirm.outputs.action == "refused")) }}'
         task:
           type: model_method
           modelIdOrName: puddlerouter
           methodName: merged
           inputs:
             text: ${{ steps.load.outputs.text }}
-      - name: route
-        description: Ask Jev which route the turn should take. Skipped for an empty turn, for a turn that looks like it holds a secret (never sent to Jev), when the route cache already holds the answer, and for a merged turn, a turn sent with the capture prefix or a yes confirm handled.
+      - name: match
+        description: >-
+          Try the turn against the recipes, through @puddleworks/recipes, before
+          asking Jev anything. A hit is deterministic whatever Jev would say, so
+          route, decide and search are skipped; a failure carries on to route.
+          Skipped for an empty, withheld or capture: turn, a merged turn, a
+          phrase on the alwaysLlm list and a yes confirm handled.
         dependsOn:
           - step: load
             condition:
               type: succeeded
+          - step: alwaysLlm
+            condition:
+              type: always
+          - step: merged
+            condition:
+              type: always
+          - step: confirm
+            condition:
+              type: always
+        weight: 0
+        allowFailure: true
+        guard: >-
+          ${{ steps.load.outputs.empty || steps.load.outputs.withheld ||
+          steps.load.outputs.capture ||
+          (has(steps.alwaysLlm) && has(steps.alwaysLlm.outputs) && steps.alwaysLlm.outputs.matched) ||
+          (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) ||
+          (has(steps.confirm) && has(steps.confirm.outputs) && (steps.confirm.outputs.action == "ran" || steps.confirm.outputs.action == "refused")) }}
+        task:
+          type: model_method
+          modelIdOrName: recipes
+          methodName: match
+          inputs:
+            text: ${{ steps.load.outputs.text }}
+            repoDir: ${{ inputs.repoDir }}
+      - name: route
+        description: Ask Jev which route the turn should take. Skipped for an empty turn, for a turn that looks like it holds a secret (never sent to Jev), when the route cache already holds the answer, and for a merged turn, a turn sent with the capture prefix, a phrase on the alwaysLlm list, a turn a recipe matched or a yes confirm handled.
+        dependsOn:
+          - step: load
+            condition:
+              type: succeeded
+          - step: alwaysLlm
+            condition:
+              type: always
+          - step: match
+            condition:
+              type: always
           - step: recall
             condition:
               type: succeeded
@@ -157,7 +227,7 @@ jobs:
               type: always
         weight: 0
         allowFailure: true
-        guard: '${{ steps.load.outputs.empty || steps.load.outputs.withheld || steps.load.outputs.capture || steps.recall.outputs.hasRoute || (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) || (has(steps.confirm) && has(steps.confirm.outputs) && (steps.confirm.outputs.action == "ran" || steps.confirm.outputs.action == "refused")) }}'
+        guard: '${{ steps.load.outputs.empty || steps.load.outputs.withheld || steps.load.outputs.capture || steps.recall.outputs.hasRoute || (has(steps.alwaysLlm) && has(steps.alwaysLlm.outputs) && steps.alwaysLlm.outputs.matched) || (has(steps.match) && has(steps.match.outputs) && steps.match.outputs.matched) || (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) || (has(steps.confirm) && has(steps.confirm.outputs) && (steps.confirm.outputs.action == "ran" || steps.confirm.outputs.action == "refused")) }}'
         task:
           type: model_method
           modelIdOrName: jev
@@ -187,9 +257,16 @@ jobs:
           a decision at or above the cut-off (fresh or cached) and the turn is
           complete (nothing pasted, fenced or cut, so the text to judge is all
           there), when the route cache already holds the answer, and for a
-          merged or capture: turn or a yes confirm handled.
+          merged or capture: turn, a phrase on the alwaysLlm list, a turn a recipe
+          matched or a yes confirm handled.
         dependsOn:
           - step: route
+            condition:
+              type: always
+          - step: alwaysLlm
+            condition:
+              type: always
+          - step: match
             condition:
               type: always
           - step: recall
@@ -205,6 +282,8 @@ jobs:
         allowFailure: true
         guard: >-
           ${{ steps.load.outputs.capture || steps.recall.outputs.hasDecision ||
+          (has(steps.alwaysLlm) && has(steps.alwaysLlm.outputs) && steps.alwaysLlm.outputs.matched) ||
+          (has(steps.match) && has(steps.match.outputs) && steps.match.outputs.matched) ||
           (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) ||
           (has(steps.confirm) && has(steps.confirm.outputs) && (steps.confirm.outputs.action == "ran" || steps.confirm.outputs.action == "refused")) ||
           !(steps.load.outputs.complete &&
@@ -226,50 +305,17 @@ jobs:
               the text given in it.
             yes: The answer to the question is yes.
             no: The answer to the question is no.
-      - name: match
-        description: >-
-          Match a deterministic turn to a recipe, through @puddleworks/recipes.
-          Skipped unless the route is deterministic at or above the cut-off, and
-          for a merged or capture: turn or a yes confirm handled.
-        dependsOn:
-          - step: route
-            condition:
-              type: always
-          - step: recall
-            condition:
-              type: succeeded
-          - step: merged
-            condition:
-              type: always
-          - step: confirm
-            condition:
-              type: always
-        weight: 0
-        allowFailure: true
-        guard: >-
-          ${{ (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) ||
-          steps.load.outputs.capture ||
-          (has(steps.confirm) && has(steps.confirm.outputs) && (steps.confirm.outputs.action == "ran" || steps.confirm.outputs.action == "refused")) ||
-          !((steps.recall.outputs.hasRoute &&
-          steps.recall.outputs.choice == "deterministic" &&
-          steps.recall.outputs.confidence >= inputs.cutoff) ||
-          (has(steps.route) && has(steps.route.outputs) &&
-          steps.route.outputs.choice == "deterministic" &&
-          steps.route.outputs.confidence >= inputs.cutoff)) }}
-        task:
-          type: model_method
-          modelIdOrName: recipes
-          methodName: match
-          inputs:
-            text: ${{ steps.load.outputs.text }}
-            repoDir: ${{ inputs.repoDir }}
       - name: search
         description: >-
           Search for extensions when no recipe matched a deterministic turn. If
           match failed it still runs, so the turn is not lost. A capture: turn
           always runs it (unless empty or withheld) and gets the request draft
-          with no search. Skipped for a merged turn or a yes confirm handled.
+          with no search. Skipped for a merged turn, a phrase on the alwaysLlm
+          list or a yes confirm handled.
         dependsOn:
+          - step: alwaysLlm
+            condition:
+              type: always
           - step: match
             condition:
               type: always
@@ -288,7 +334,8 @@ jobs:
         weight: 0
         allowFailure: true
         guard: >-
-          ${{ (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) ||
+          ${{ (has(steps.alwaysLlm) && has(steps.alwaysLlm.outputs) && steps.alwaysLlm.outputs.matched) ||
+          (has(steps.merged) && has(steps.merged.outputs) && steps.merged.outputs.matched) ||
           (has(steps.confirm) && has(steps.confirm.outputs) && (steps.confirm.outputs.action == "ran" || steps.confirm.outputs.action == "refused")) ||
           (steps.load.outputs.capture &&
           (steps.load.outputs.empty || steps.load.outputs.withheld)) ||
@@ -407,6 +454,9 @@ jobs:
           - step: recall
             condition:
               type: succeeded
+          - step: alwaysLlm
+            condition:
+              type: always
           - step: confirm
             condition:
               type: always
@@ -448,6 +498,7 @@ jobs:
             hookStartedAt: ${{ inputs.hookStartedAt }}
             sourceRef: ${{ steps.load.outputs.sourceRef }}
             capture: ${{ steps.load.outputs.capture }}
+            alwaysLlm: "${{ has(steps.alwaysLlm) && has(steps.alwaysLlm.outputs) ? steps.alwaysLlm.outputs.matched : false }}"
             recalled: ${{ steps.recall.outputs }}
             choice: '${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.choice : "" }}'
             confidence: "${{ has(steps.route) && has(steps.route.outputs) ? steps.route.outputs.confidence : 0.0 }}"

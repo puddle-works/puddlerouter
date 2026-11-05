@@ -58,3 +58,31 @@ Deno.test("the keys the recipes extension reads are not errors here", () => {
   assertEquals(c.errors, []);
   assert(allowPredicate(c.allowlist)("@acme/anything"));
 });
+
+Deno.test("alwaysLlm entries load as case-insensitive patterns", () => {
+  const c = parseConfig("alwaysLlm:\n  - '^load the handover doc\\b'\n");
+  assertEquals(c.errors, []);
+  assertEquals(c.alwaysLlm.length, 1);
+  assert(c.alwaysLlm[0].test("Load The Handover Doc at /tmp/x.md"));
+  assert(!c.alwaysLlm[0].test("please load the handover doc"));
+});
+
+Deno.test("a bad alwaysLlm entry is reported and dropped; the rest still load", () => {
+  const c = parseConfig(
+    "alwaysLlm:\n  - '('\n  - ''\n  - 12\n  - '^write the handover'\n",
+  );
+  assertEquals(c.errors.length, 3);
+  assert(c.errors.every((e) => e.startsWith("alwaysLlm: ignored")));
+  assertEquals(c.alwaysLlm.map((re) => re.source), ["^write the handover"]);
+});
+
+Deno.test("alwaysLlm that is not a list is reported", () => {
+  const c = parseConfig("alwaysLlm: '^load'\n");
+  assertEquals(c.alwaysLlm, []);
+  assertEquals(c.errors, ["alwaysLlm: must be a list of patterns"]);
+});
+
+Deno.test("no file or an unreadable one gives no alwaysLlm patterns", () => {
+  assertEquals(parseConfig("").alwaysLlm, []);
+  assertEquals(parseConfig("allow: [unclosed").alwaysLlm, []);
+});

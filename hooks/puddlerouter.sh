@@ -207,6 +207,7 @@ if [ "$MODE" = live ]; then
     | if .action == "block" and $t != "" then {decision: "block", reason: $t}
       elif .action == "hint" and $t != "" then
         {note: "puddlerouter added this to Claude'"'"'s context (\(if $why == "" then "" else $why + ", " end)\($s) s):\n\n\($t)"}
+      elif ($why | startswith("not routed")) then {note: "puddlerouter: \($why)"}
       else
         {note: "puddlerouter: sent to Claude (\(if $why == "" then "" else $why
           + (if .confidence | type == "number" then " at \(.confidence)" else "" end)

@@ -12,6 +12,13 @@ allow:
 reads:
   - "@webframp/github list_prs"
 
+# Phrases that must always go to Claude, with no Jev call. Each is a regular
+# expression, case-insensitive, tried against the typed text with pasted and
+# fenced blocks taken out. It need not match the whole turn: use ^ for the start.
+# A hit beats a cached route and a matching recipe. A capture: turn is still logged.
+alwaysLlm:
+  - '^load the handover doc\b'
+
 # Your own recipes, tried before those from packs. The turn must match `pattern`
 # in full, and each captured piece must have the declared shape (int, repo or
 # word) before it becomes a method input. @puddleworks/recipes reads these.

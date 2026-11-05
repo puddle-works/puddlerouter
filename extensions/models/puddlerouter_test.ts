@@ -11,6 +11,7 @@ import {
 } from "jsr:@std/assert@1";
 import { parseConfig } from "./_lib/config.ts";
 import {
+  alwaysLlmHit,
   buildReply,
   captureSearch,
   cleanTurn,
@@ -552,7 +553,7 @@ Deno.test("buildReply in shadow mode passes a recipe answer but records it", () 
   assertEquals(r.recipe, "git-log");
 });
 
-Deno.test("buildReply does not use a recipe off the deterministic route", () => {
+Deno.test("a matched recipe answers whatever route Jev gave or the cache holds", () => {
   const r = buildReply({
     ...detArgs,
     choice: "llm",
@@ -561,7 +562,9 @@ Deno.test("buildReply does not use a recipe off the deterministic route", () => 
     resultOk: true,
     resultText: "x",
   });
-  assertEquals(r.action, "pass");
+  assertEquals(r.action, "block");
+  assertEquals(r.route, "deterministic");
+  assertEquals(r.recipe, "git-status");
 });
 
 Deno.test("searchTurn offers only allowlisted extensions", async () => {
@@ -1389,4 +1392,269 @@ Deno.test("buildReply trusts confirm over a route recalled for the same words", 
   });
   assertEquals(r.action, "block");
   assertEquals(r.route, "deterministic");
+});
+
+const NOT_ROUTED = "not routed (an always-LLM phrase)";
+
+Deno.test("alwaysLlmHit tries the typed text with whitespace collapsed", () => {
+  const patterns = parseConfig(
+    "alwaysLlm: ['^load the handover doc\\b']\n",
+  ).alwaysLlm;
+  assertEquals(
+    alwaysLlmHit("LOAD   the\nhandover  doc at /tmp/x.md", patterns),
+    "^load the handover doc\\b",
+  );
+  assertEquals(alwaysLlmHit("where is the handover doc", patterns), "");
+  assertEquals(alwaysLlmHit("anything", []), "");
+});
+
+Deno.test("alwaysLlmHit does not count pasted or fenced blocks", () => {
+  const patterns = parseConfig(
+    "alwaysLlm: ['^load the handover doc$', 'secret phrase']\n",
+  ).alwaysLlm;
+  assertEquals(
+    alwaysLlmHit("[pasted text]\nload the handover doc\n[code block]", patterns),
+    "^load the handover doc$",
+  );
+  assertEquals(alwaysLlmHit("[pasted text] what is this?", patterns), "");
+});
+
+Deno.test("an always-LLM turn passes in live mode with the reason, and no confidence", () => {
+  const r = buildReply({
+    mode: "live",
+    sourceRef: "puddlerouter:0123456789abcdef",
+    cutoff: 0.7,
+    confidence: 0,
+    alwaysLlm: true,
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.route, "llm");
+  assertEquals(r.reason, NOT_ROUTED);
+  assertEquals(r.confidence, null);
+});
+
+Deno.test("an always-LLM turn passes in shadow mode and records why", () => {
+  const r = buildReply({
+    mode: "shadow",
+    sourceRef: "puddlerouter:0123456789abcdef",
+    cutoff: 0.7,
+    alwaysLlm: true,
+  });
+  assertEquals(r.wouldAction, "pass");
+  assertEquals(r.reason, `shadow: ${NOT_ROUTED}`);
+});
+
+Deno.test("an always-LLM turn ignores a recipe and a route", () => {
+  const r = buildReply({
+    ...detArgs,
+    alwaysLlm: true,
+    matchKind: "recipe",
+    recipeId: "git-status",
+    resultOk: true,
+    resultText: "x",
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.route, "llm");
+  assertEquals(r.recipe, "");
+  assertEquals(r.reason, NOT_ROUTED);
+});
+
+Deno.test("a capture: turn beats an always-LLM phrase", () => {
+  const r = buildReply({
+    mode: "live",
+    sourceRef: "puddlerouter:0123456789abcdef",
+    cutoff: 0.7,
+    capture: true,
+    alwaysLlm: true,
+    requestUrl: "http://127.0.0.1:3002/requests/x",
+  });
+  assertEquals(r.action, "block");
+  assertEquals(r.route, "capture");
+});
+
+Deno.test("a matched recipe reports the deterministic route with no route answer", () => {
+  for (const mode of ["live", "shadow"] as const) {
+    const r = buildReply({
+      mode,
+      sourceRef: "puddlerouter:0123456789abcdef",
+      cutoff: 0.7,
+      confidence: 0,
+      matchKind: "recipe",
+      recipeId: "git-status",
+      resultAction: "ran",
+      resultOk: true,
+      resultText: "On branch main",
+    });
+    assertEquals(r.wouldAction, "block");
+    assertEquals(r.route, "deterministic");
+    assertEquals(r.recipe, "git-status");
+    assertEquals(r.choice, "");
+    assertEquals(r.confidence, null);
+    assertMatch(r.reason, /recipe git-status answered$/);
+  }
+});
+
+Deno.test("a matched write recipe with no route answer still asks first", () => {
+  const r = buildReply({
+    mode: "live",
+    sourceRef: "puddlerouter:0123456789abcdef",
+    cutoff: 0.7,
+    matchKind: "recipe",
+    recipeId: "write-it",
+    resultAction: "ask",
+    resultOk: true,
+    resultText: "This would change x. Say yes.",
+  });
+  assertEquals(r.action, "block");
+  assertEquals(r.route, "deterministic");
+  assertEquals(r.reason, "recipe write-it asked before running");
+});
+
+Deno.test("a matched recipe that failed passes, naming the recipe", () => {
+  const r = buildReply({
+    mode: "live",
+    sourceRef: "puddlerouter:0123456789abcdef",
+    cutoff: 0.7,
+    matchKind: "recipe",
+    recipeId: "git-status",
+    resultOk: false,
+  });
+  assertEquals(r.action, "pass");
+  assertEquals(r.reason, "recipe git-status failed");
+});
+
+function methodContext(resources: Record<string, unknown> = {}) {
+  const written: Record<string, Record<string, unknown>> = {};
+  return {
+    written,
+    context: {
+      globalArgs: {},
+      writeResource: (
+        _spec: string,
+        name: string,
+        data: Record<string, unknown>,
+      ) => {
+        written[name] = data;
+        return Promise.resolve({ name });
+      },
+      readResource: (name: string) =>
+        Promise.resolve(
+          (resources[name] ?? null) as Record<string, unknown> | null,
+        ),
+      logger: { info: () => {} },
+    },
+  };
+}
+
+Deno.test("alwaysLlm reads puddlerouter.yaml and stores the hit", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      `${dir}/puddlerouter.yaml`,
+      "alwaysLlm: ['^load the handover doc\\b']\n",
+    );
+    const { written, context } = methodContext();
+    await model.methods.alwaysLlm.execute(
+      { text: "load the handover doc at /x", repoDir: dir },
+      context,
+    );
+    assertEquals(written.alwaysLlm.matched, true);
+    assertEquals(written.alwaysLlm.pattern, "^load the handover doc\\b");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("alwaysLlm with no file stores no hit", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const { written, context } = methodContext();
+    await model.methods.alwaysLlm.execute(
+      { text: "load the handover doc", repoDir: dir },
+      context,
+    );
+    assertEquals(written.alwaysLlm.matched, false);
+    assertEquals(written.alwaysLlm.pattern, "");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+const REPLY_REF = "puddlerouter:0123456789abcdef";
+const CACHED = {
+  hasRoute: true,
+  choice: "llm",
+  confidence: 0.9,
+  hasDecision: false,
+  yes: 0,
+  hasPick: false,
+  pickChoice: "",
+  pickConfidence: 0,
+  candidates: [],
+  cachedAt: "2026-11-05T00:00:00.000Z",
+};
+
+Deno.test("reply for an always-LLM turn ignores a cached deterministic route", async () => {
+  const { written, context } = methodContext();
+  await model.methods.reply.execute(
+    {
+      mode: "live",
+      sourceRef: REPLY_REF,
+      cutoff: 0.7,
+      answerCutoff: 0.8,
+      complete: true,
+      alwaysLlm: true,
+      recalled: { ...CACHED, choice: "deterministic" },
+    },
+    context,
+  );
+  assertEquals(written.reply.route, "llm");
+  assertEquals(written.reply.choice, "");
+  assertEquals(written.reply.cached, false);
+  assertEquals(written.reply.reason, NOT_ROUTED);
+  assertEquals(written[routeCacheKey(REPLY_REF)], undefined);
+});
+
+Deno.test("reply for a matched recipe ignores a cached llm route", async () => {
+  const { written, context } = methodContext();
+  await model.methods.reply.execute(
+    {
+      mode: "live",
+      sourceRef: REPLY_REF,
+      cutoff: 0.7,
+      answerCutoff: 0.8,
+      complete: true,
+      matchKind: "recipe",
+      recipeId: "git-status",
+      resultAction: "ran",
+      resultOk: true,
+      resultText: "On branch main",
+      recalled: CACHED,
+    },
+    context,
+  );
+  assertEquals(written.reply.action, "block");
+  assertEquals(written.reply.route, "deterministic");
+  assertEquals(written.reply.choice, "");
+  assertEquals(written.reply.cached, false);
+  assertEquals(written[routeCacheKey(REPLY_REF)], undefined);
+});
+
+Deno.test("reply with no match still uses a cached route", async () => {
+  const { written, context } = methodContext();
+  await model.methods.reply.execute(
+    {
+      mode: "live",
+      sourceRef: REPLY_REF,
+      cutoff: 0.7,
+      answerCutoff: 0.8,
+      complete: true,
+      matchKind: "none",
+      recalled: CACHED,
+    },
+    context,
+  );
+  assertEquals(written.reply.choice, "llm");
+  assertEquals(written.reply.cached, true);
+  assertEquals(written.reply.reason, "llm route");
 });

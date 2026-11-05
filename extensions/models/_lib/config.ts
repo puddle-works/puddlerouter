@@ -1,9 +1,10 @@
 /**
- * The `allow:` list in the local `puddlerouter.yaml`: extra extensions a search
- * may offer, on top of the defaults.
+ * The local `puddlerouter.yaml`: `allow:`, extra extensions a search may offer on
+ * top of the defaults, and `alwaysLlm:`, phrases that always go to Claude.
  *
  * ```yaml
  * allow: ['@acme/*']
+ * alwaysLlm: ['^load the handover doc\\b']
  * ```
  *
  * The same file holds `recipes:` and `reads:`, which `@puddleworks/recipes`
@@ -20,12 +21,27 @@ export { allowPredicate, DEFAULT_ALLOWLIST };
 /** What the router takes from the file. */
 export interface Config {
   allowlist: string[];
+  /** Case-insensitive patterns tried against the typed text of a turn. */
+  alwaysLlm: RegExp[];
   errors: string[];
+}
+
+function compile(entry: unknown): RegExp | null {
+  if (typeof entry !== "string" || entry === "") return null;
+  try {
+    return new RegExp(entry, "i");
+  } catch {
+    return null;
+  }
 }
 
 /** Parse the file's text; never throws. */
 export function parseConfig(text: string): Config {
-  const config: Config = { allowlist: [...DEFAULT_ALLOWLIST], errors: [] };
+  const config: Config = {
+    allowlist: [...DEFAULT_ALLOWLIST],
+    alwaysLlm: [],
+    errors: [],
+  };
   let doc: unknown;
   try {
     doc = parse(text);
@@ -38,11 +54,19 @@ export function parseConfig(text: string): Config {
     config.errors.push("the file must be a mapping");
     return config;
   }
-  const { allow } = doc as Record<string, unknown>;
+  const { allow, alwaysLlm } = doc as Record<string, unknown>;
   for (const entry of Array.isArray(allow) ? allow : []) {
     if (typeof entry === "string" && isEntry(entry)) {
       if (!config.allowlist.includes(entry)) config.allowlist.push(entry);
     } else config.errors.push(`allow: ignored ${JSON.stringify(entry)}`);
+  }
+  if (alwaysLlm !== undefined && !Array.isArray(alwaysLlm)) {
+    config.errors.push("alwaysLlm: must be a list of patterns");
+  }
+  for (const entry of Array.isArray(alwaysLlm) ? alwaysLlm : []) {
+    const pattern = compile(entry);
+    if (pattern) config.alwaysLlm.push(pattern);
+    else config.errors.push(`alwaysLlm: ignored ${JSON.stringify(entry)}`);
   }
   return config;
 }
