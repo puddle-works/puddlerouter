@@ -22,7 +22,10 @@ Deno.test("the example names its read-only method and no longer claims readOnly"
     reads: string[];
     recipes: Array<Record<string, unknown>>;
   };
-  assertEquals(doc.reads, ["@webframp/github list_prs"]);
+  assertEquals(doc.reads, [
+    "@webframp/github list_prs",
+    "@webframp/github list_workflows",
+  ]);
   assertEquals(doc.recipes.map((r) => r.id), ["github-open-prs"]);
   assertEquals(doc.recipes[0].readOnly, undefined);
 });
