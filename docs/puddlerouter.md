@@ -15,6 +15,7 @@
 - [Write recipes: the gate (issue #27)](#write-recipes-the-gate-issue-27)
 - [Where write recipes go](#where-write-recipes-go)
 - [Recipes move out (issue #49)](#recipes-move-out-issue-49)
+- [Other agents: Codex, OpenCode and Pi (issue #15)](#other-agents-codex-opencode-and-pi-issue-15)
 
 ## Step 0: checks
 
@@ -1089,3 +1090,50 @@ paired one to one, so this is not proof for every turn.
 
 The last row means a miss followed by a real Jev answer was not run here. Unit
 and workflow tests cover it.
+
+## Other agents: Codex, OpenCode and Pi (issue #15)
+
+Read from each agent's own docs and source on 2026-11-09 (Codex
+`rust-v0.167.0`, OpenCode `v1.19.5` and its V2 plugin docs on `dev`, Pi
+`v1.5.0`). Nothing was run against a real agent.
+
+The adapter has to hand the workflow the typed turn and, in live mode, either
+stop the turn and show an answer (`block`) or add text to the model's context
+(`hint`). All three agents have a hook that runs before the model replies, so
+none needs a wrapper around its binary.
+
+| Agent | Pre-turn hook | Gets the full prompt | Inject (`hint`) | Stop the turn (`block`) | Minimum adapter |
+|---|---|---|---|---|---|
+| Codex | `UserPromptSubmit` command hook, in `~/.codex/hooks.json` or `<repo>/.codex/hooks.json` | yes (`prompt`, plus `session_id`) | yes (`hookSpecificOutput.additionalContext`) | yes (`{"decision":"block","reason":…}`) | `hooks/puddlerouter.sh` itself, registered for `UserPromptSubmit` |
+| OpenCode | V1 plugin `chat.message`; V2 `ctx.session.hook("prompt")` | yes (the message parts) | yes (add a part, or a system transform) | no | a plugin that runs the workflow and adds the hint |
+| Pi | extension `input` event, in `~/.pi/agent/extensions/` or `.pi/extensions/` | yes (`event.text`, raw, before skill expansion) | yes (`before_agent_start` returns a message) | yes (`{action: "handled"}` skips the agent; `ctx.ui.notify` shows the answer) | an extension that runs the workflow |
+
+**Codex uses Claude Code's contract.** The input has `prompt` and
+`session_id`, and the output takes the same `decision`/`reason`,
+`hookSpecificOutput.additionalContext` and `systemMessage` that
+`hooks/puddlerouter.sh` already writes. Hooks are on by default. A project's
+hooks run only once the project is trusted, and each hook has to be reviewed
+in `/hooks` before it runs, and again after it changes. Two things in the
+script are Claude-specific: its harness-message skip rules (a leading `<`,
+`<pasted_content>`) and the word "Claude" in its notes.
+
+**OpenCode can't stop a turn.** A `chat.message` hook can change the message,
+but throwing from it or returning `noReply` doesn't stop the reply. Requests
+to allow that were closed as not planned (anomalyco/opencode#26022,
+anomalyco/opencode#30434). A `block` can only become a hint such as "reply
+with exactly this answer", which still costs a model call. OpenCode 2 replaces
+`chat.message` with `ctx.session.hook("prompt")` and V1 plugins don't run
+there, so a plugin would need writing twice, or once against V2 after it is
+released.
+
+**Pi can do everything the Claude hook does.** `input` sees the raw text and
+can answer it without the model; `before_agent_start` can add a message. Pi
+extensions are TypeScript and can run a subprocess, so the extension would run
+the workflow the same way the hook script does: a temp file for the turn, and
+only its path passed to swamp.
+
+**Proposed, not yet agreed.** Use each agent's own hook: Codex reuses the hook
+script, Pi gets an extension, and OpenCode gets a plugin that can only hint.
+Whether to port before more live data, and whether the adapters live here or
+in their own repo, are still open (see the issue).
+
