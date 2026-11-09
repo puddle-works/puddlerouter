@@ -1037,7 +1037,7 @@ function resourceStore(context: MethodContext): Store {
 /** The model type: `load`, `alwaysLlm`, `recall`, `merged`, `search` and `reply`. */
 export const model = {
   type: "@puddleworks/puddlerouter",
-  version: "2026.11.05.1",
+  version: "2026.11.09.1",
   upgrades: [
     {
       toVersion: "2026.11.04.1",
@@ -1049,6 +1049,12 @@ export const model = {
       toVersion: "2026.11.05.1",
       description:
         "Recipes are tried before Jev, and alwaysLlm phrases go straight to Claude. No settings changed.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.09.1",
+      description:
+        "A Capture request carries the turn as its phrase and the candidates' names. No settings changed.",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
