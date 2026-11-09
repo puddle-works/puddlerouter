@@ -11,6 +11,7 @@ allow:
 # what it changes. A pack cannot set this: only this file can.
 reads:
   - "@webframp/github list_prs"
+  - "@webframp/github list_workflows"
 
 # Phrases that must always go to Claude, with no Jev call. Each is a regular
 # expression, case-insensitive, tried against the typed text with pasted and
