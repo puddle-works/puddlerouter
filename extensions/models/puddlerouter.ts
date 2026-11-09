@@ -584,6 +584,8 @@ export const SearchSchema = z.object({
   requestDescription: z.string(),
   /** Idempotency key: the turn's sourceRef, so one request per distinct turn. */
   requestKey: z.string(),
+  /** Who the request is logged for (Capture's requester); blank for the bot. */
+  requestRequester: z.string(),
   searchedAt: z.iso.datetime(),
 });
 /** The stored search. */
@@ -654,6 +656,7 @@ export function captureSearch(
     requestTitle: text.replace(/\s+/g, " ").trim().slice(0, 80),
     requestDescription: description,
     requestKey: sourceRef,
+    requestRequester: "",
     searchedAt: now.toISOString(),
   };
 }
@@ -746,6 +749,7 @@ export async function searchTurn(
     requestTitle: d.title,
     requestDescription: d.description,
     requestKey: d.key,
+    requestRequester: "",
     searchedAt: now.toISOString(),
   };
 }
@@ -1147,8 +1151,17 @@ export const model = {
       arguments: SearchArgsSchema,
       execute: async (args: SearchArgs, context: MethodContext) => {
         context.logger.info("Searching for turn", {});
+        const config = await loadConfig(args.repoDir);
+        if (config.errors.length) {
+          context.logger.info("puddlerouter.yaml: {errors}", {
+            errors: config.errors.join("; "),
+          });
+        }
         if (args.capture) {
-          const search = captureSearch(args.text, args.sourceRef ?? "");
+          const search = {
+            ...captureSearch(args.text, args.sourceRef ?? ""),
+            requestRequester: config.requester,
+          };
           const handle = await context.writeResource(
             "search",
             "search",
@@ -1157,13 +1170,7 @@ export const model = {
           context.logger.info("Capture: turn, nothing searched", {});
           return { dataHandles: [handle] };
         }
-        const config = await loadConfig(args.repoDir);
-        if (config.errors.length) {
-          context.logger.info("puddlerouter.yaml: {errors}", {
-            errors: config.errors.join("; "),
-          });
-        }
-        const search = await searchTurn(
+        const found = await searchTurn(
           args.text,
           swampExec,
           new Date(),
@@ -1171,6 +1178,7 @@ export const model = {
           config,
           resourceStore(context),
         );
+        const search = { ...found, requestRequester: config.requester };
         const handle = await context.writeResource("search", "search", search);
         context.logger.info("Search {kind} for {query}", {
           kind: search.kind,

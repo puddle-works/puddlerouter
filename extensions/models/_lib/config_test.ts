@@ -86,3 +86,15 @@ Deno.test("no file or an unreadable one gives no alwaysLlm patterns", () => {
   assertEquals(parseConfig("").alwaysLlm, []);
   assertEquals(parseConfig("allow: [unclosed").alwaysLlm, []);
 });
+
+Deno.test("requester is the email requests are logged for; anything else is dropped", () => {
+  assertEquals(parseConfig("").requester, "");
+  const ok = parseConfig("requester: mark@example.com\n");
+  assertEquals(ok.requester, "mark@example.com");
+  assertEquals(ok.errors, []);
+  for (const bad of ["requester: mark\n", "requester: [a@b.c]\n", "requester: ''\n"]) {
+    const c = parseConfig(bad);
+    assertEquals(c.requester, "", bad);
+    assertEquals(c.errors.length, 1, bad);
+  }
+});

@@ -445,6 +445,7 @@ jobs:
             title: ${{ steps.search.outputs.requestTitle }}
             description: ${{ steps.search.outputs.requestDescription }}
             sourceRef: ${{ steps.search.outputs.requestKey }}
+            requester: ${{ steps.search.outputs.requestRequester }}
       - name: reply
         description: Store what the hook should do. Runs whether or not Jev answered.
         dependsOn:

@@ -12,6 +12,10 @@ allow:
 reads:
   - "@webframp/github list_prs"
 
+# Who Capture requests are logged for: your email, as in Capture's people list.
+# Unset, Intake Bot owns them. If Capture doesn't know the email, nothing is logged.
+# requester: you@example.com
+
 # Phrases that must always go to Claude, with no Jev call. Each is a regular
 # expression, case-insensitive, tried against the typed text with pasted and
 # fenced blocks taken out. It need not match the whole turn: use ^ for the start.
