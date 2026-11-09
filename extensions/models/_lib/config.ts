@@ -7,6 +7,10 @@
  * alwaysLlm: ['^load the handover doc\\b']
  * ```
  *
+ * `requester:` is the email of the person this runtime repo routes turns for:
+ * Capture requests are logged as theirs (they must be in Capture's people
+ * list). Unset, the logging bot owns them.
+ *
  * The same file holds `recipes:` and `reads:`, which `@puddleworks/recipes`
  * reads; this reader leaves them alone. A bad entry is reported in `errors` and
  * dropped; the rest still load.
@@ -23,8 +27,12 @@ export interface Config {
   allowlist: string[];
   /** Case-insensitive patterns tried against the typed text of a turn. */
   alwaysLlm: RegExp[];
+  /** Who Capture requests are logged for; blank for the logging bot. */
+  requester: string;
   errors: string[];
 }
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function compile(entry: unknown): RegExp | null {
   if (typeof entry !== "string" || entry === "") return null;
@@ -40,6 +48,7 @@ export function parseConfig(text: string): Config {
   const config: Config = {
     allowlist: [...DEFAULT_ALLOWLIST],
     alwaysLlm: [],
+    requester: "",
     errors: [],
   };
   let doc: unknown;
@@ -54,7 +63,12 @@ export function parseConfig(text: string): Config {
     config.errors.push("the file must be a mapping");
     return config;
   }
-  const { allow, alwaysLlm } = doc as Record<string, unknown>;
+  const { allow, alwaysLlm, requester } = doc as Record<string, unknown>;
+  if (typeof requester === "string" && EMAIL.test(requester.trim())) {
+    config.requester = requester.trim();
+  } else if (requester !== undefined) {
+    config.errors.push(`requester: ignored ${JSON.stringify(requester)}`);
+  }
   for (const entry of Array.isArray(allow) ? allow : []) {
     if (typeof entry === "string" && isEntry(entry)) {
       if (!config.allowlist.includes(entry)) config.allowlist.push(entry);

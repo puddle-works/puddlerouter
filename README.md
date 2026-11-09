@@ -132,7 +132,7 @@ origin repo's `owner/name` as arguments.
 ## Local config
 
 `<repoDir>/puddlerouter.yaml` (gitignored; copy `puddlerouter.example.yaml`) has
-four optional keys. A bad entry or an unreadable file is dropped and logged; the
+five optional keys. A bad entry or an unreadable file is dropped and logged; the
 rest still applies.
 
 - `allow:` extra extension names or `@scope/*` scopes. They add to the defaults.
@@ -141,6 +141,11 @@ rest still applies.
   wildcards. Recipes that call one answer at once; any other method asks first.
   You are vouching for that method. Only this file can set it: a pack can't.
 - `recipes:` your own recipes, tried before those from packs.
+- `requester:` the email of the person this repo routes turns for. Capture
+  requests are logged as theirs, with Intake Bot recorded as the account that
+  logged them. They must be in Capture's people list: if not, Capture refuses
+  the request and the turn goes to Claude ("no request logged"). Unset, Intake
+  Bot owns the requests, as before. Only `search` reads it.
 - `alwaysLlm:` patterns for phrases that must always go to Claude. Each is a
   regular expression, case-insensitive, tried against the typed text with pasted
   and fenced blocks taken out. It need not match the whole turn, so anchor it with
@@ -245,7 +250,9 @@ names of the extensions search found as `candidateExtensions`. A turn longer
 than Capture's 500-character limit is logged with no phrase. The request is
 logged in the repo the hook runs puddlerouter in (`PUDDLEROUTER_REPO`), not necessarily this one: Capture's
 people and requests are that repo's swamp data, in its `capture` instance,
-which acts as Intake Bot (`intake-bot@example.com`, its `defaultAs`). That repo
+which acts as Intake Bot (`intake-bot@example.com`, its `defaultAs`). With
+`requester:` set in `puddlerouter.yaml`, the request is that person's and
+Intake Bot is only recorded as having logged it. That repo
 can be a separate desk that holds only released extensions (see
 [Run in a separate desk](#run-in-a-separate-desk)). There is no key. To read
 them, run `swamp behavior run viewer serve --input port=3002` in that repo and

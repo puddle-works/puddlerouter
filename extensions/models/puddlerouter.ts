@@ -588,6 +588,8 @@ export const SearchSchema = z.object({
   requestPhrase: z.string(),
   /** The candidates' names, c1..c3 in order, for Capture's recipe. */
   requestCandidates: z.array(z.string()),
+  /** Who the request is logged for (Capture's requester); blank for the bot. */
+  requestRequester: z.string(),
   searchedAt: z.iso.datetime(),
 });
 /** The stored search. */
@@ -678,6 +680,7 @@ export function captureSearch(
     requestKey: sourceRef,
     requestPhrase: "",
     requestCandidates: [],
+    requestRequester: "",
     searchedAt: now.toISOString(),
   };
 }
@@ -772,6 +775,7 @@ export async function searchTurn(
     requestKey: d.key,
     requestPhrase: d.phrase,
     requestCandidates: d.candidateExtensions,
+    requestRequester: "",
     searchedAt: now.toISOString(),
   };
 }
@@ -1037,7 +1041,7 @@ function resourceStore(context: MethodContext): Store {
 /** The model type: `load`, `alwaysLlm`, `recall`, `merged`, `search` and `reply`. */
 export const model = {
   type: "@puddleworks/puddlerouter",
-  version: "2026.11.09.1",
+  version: "2026.11.09.2",
   upgrades: [
     {
       toVersion: "2026.11.04.1",
@@ -1055,6 +1059,12 @@ export const model = {
       toVersion: "2026.11.09.1",
       description:
         "A Capture request carries the turn as its phrase and the candidates' names. No settings changed.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.09.2",
+      description:
+        "A Capture request is logged for the requester in puddlerouter.yaml. No settings changed.",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -1179,8 +1189,17 @@ export const model = {
       arguments: SearchArgsSchema,
       execute: async (args: SearchArgs, context: MethodContext) => {
         context.logger.info("Searching for turn", {});
+        const config = await loadConfig(args.repoDir);
+        if (config.errors.length) {
+          context.logger.info("puddlerouter.yaml: {errors}", {
+            errors: config.errors.join("; "),
+          });
+        }
         if (args.capture) {
-          const search = captureSearch(args.text, args.sourceRef ?? "");
+          const search = {
+            ...captureSearch(args.text, args.sourceRef ?? ""),
+            requestRequester: config.requester,
+          };
           const handle = await context.writeResource(
             "search",
             "search",
@@ -1189,13 +1208,7 @@ export const model = {
           context.logger.info("Capture: turn, nothing searched", {});
           return { dataHandles: [handle] };
         }
-        const config = await loadConfig(args.repoDir);
-        if (config.errors.length) {
-          context.logger.info("puddlerouter.yaml: {errors}", {
-            errors: config.errors.join("; "),
-          });
-        }
-        const search = await searchTurn(
+        const found = await searchTurn(
           args.text,
           swampExec,
           new Date(),
@@ -1203,6 +1216,7 @@ export const model = {
           config,
           resourceStore(context),
         );
+        const search = { ...found, requestRequester: config.requester };
         const handle = await context.writeResource("search", "search", search);
         context.logger.info("Search {kind} for {query}", {
           kind: search.kind,

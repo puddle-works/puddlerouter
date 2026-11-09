@@ -447,6 +447,7 @@ jobs:
             sourceRef: ${{ steps.search.outputs.requestKey }}
             phrase: ${{ steps.search.outputs.requestPhrase }}
             candidateExtensions: ${{ steps.search.outputs.requestCandidates }}
+            requester: ${{ steps.search.outputs.requestRequester }}
       - name: reply
         description: Store what the hook should do. Runs whether or not Jev answered.
         dependsOn:

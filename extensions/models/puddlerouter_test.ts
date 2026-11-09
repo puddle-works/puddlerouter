@@ -1181,6 +1181,33 @@ Deno.test("captureSearch drafts the request from the turn without searching", ()
   assertEquals(m.searchedAt, "2026-10-27T10:00:00.000Z");
 });
 
+Deno.test("search logs the request for the requester in puddlerouter.yaml", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const run = async () => {
+      const w: Written[] = [];
+      await model.methods.search.execute(
+        {
+          text: "add a weather recipe",
+          sourceRef: "puddlerouter:0123456789abcdef",
+          repoDir: dir,
+          capture: true,
+        },
+        fakeContext(w),
+      );
+      return w[0].data;
+    };
+    assertEquals((await run()).requestRequester, "", "no file: the bot owns it");
+    await Deno.writeTextFile(
+      `${dir}/puddlerouter.yaml`,
+      "requester: mark@example.com\n",
+    );
+    assertEquals((await run()).requestRequester, "mark@example.com");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("search for a capture: turn searches nothing and writes the draft", async () => {
   const w: Written[] = [];
   await model.methods.search.execute(

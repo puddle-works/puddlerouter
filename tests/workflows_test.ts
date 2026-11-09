@@ -253,6 +253,7 @@ Deno.test("raise logs a Capture request, only in live mode for a turn nothing ca
       "steps.search.outputs.requestCandidates",
     ),
   );
+  assert(inputs.requester.includes("steps.search.outputs.requestRequester"));
   const reply = await stepOf("workflow-puddlerouter.yaml", "reply");
   const url = (reply.task.inputs as Record<string, string>).requestUrl;
   for (
