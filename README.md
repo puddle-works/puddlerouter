@@ -244,8 +244,11 @@ recipe backlog: they are discussed and agreed in Capture, then built. The
 `raise` step runs `@puddleworks/capture-log-request` from the swamp extension
 [`@puddleworks/capture`](https://github.com/puddle-works/puddleworks-capture),
 which passes the turn's `sourceRef` as the idempotency key, so sending the same
-turn again gives the same request. The request is logged in the repo the hook
-runs puddlerouter in (`PUDDLEROUTER_REPO`), not necessarily this one: Capture's
+turn again gives the same request. It also passes the turn as the request's
+`phrase`, which Capture makes the first example of the spec's recipe, and the
+names of the extensions search found as `candidateExtensions`. A turn longer
+than Capture's 500-character limit is logged with no phrase. The request is
+logged in the repo the hook runs puddlerouter in (`PUDDLEROUTER_REPO`), not necessarily this one: Capture's
 people and requests are that repo's swamp data, in its `capture` instance,
 which acts as Intake Bot (`intake-bot@example.com`, its `defaultAs`). With
 `requester:` set in `puddlerouter.yaml`, the request is that person's and
@@ -263,8 +266,8 @@ To log a request yourself, start the turn with `capture:` (any case), for
 example `capture: a recipe that lists my open PRs across repos`. Jev, the
 merged check and the recipe search are skipped; the request's title is the
 turn's first 80 characters (without the prefix) and its description is the
-cleaned turn. The hook shows the link instead of running Claude. If logging
-fails, Claude gets a hint to tell you it was not logged and not to act on the
+cleaned turn, with no phrase. The hook shows the link instead of running
+Claude. If logging fails, Claude gets a hint to tell you it was not logged and not to act on the
 turn. An empty `capture:` turn, or one that looks like it holds a secret, is
 not logged. Pasted blocks are left out of the request, as for every turn.
 

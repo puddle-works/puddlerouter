@@ -584,6 +584,10 @@ export const SearchSchema = z.object({
   requestDescription: z.string(),
   /** Idempotency key: the turn's sourceRef, so one request per distinct turn. */
   requestKey: z.string(),
+  /** The turn as Capture's requested phrase; blank for none. */
+  requestPhrase: z.string(),
+  /** The candidates' names, c1..c3 in order, for Capture's recipe. */
+  requestCandidates: z.array(z.string()),
   /** Who the request is logged for (Capture's requester); blank for the bot. */
   requestRequester: z.string(),
   searchedAt: z.iso.datetime(),
@@ -604,16 +608,28 @@ function criteriaFor(candidates: Search["candidates"]): Record<string, string> {
   return criteria;
 }
 
+/** The longest requested phrase Capture's create_request takes. */
+export const MAX_PHRASE = 500;
+
 /**
  * The Capture request to log for a turn no recipe or extension can answer.
- * Capture shows the description as plain text, so it has no Markdown.
+ * Capture shows the description as plain text, so it has no Markdown. The
+ * turn is also the requested phrase, which Capture makes the recipe's first
+ * example; one too long for Capture is left blank, so the request is still
+ * logged with the turn in its description.
  */
 export function requestDraft(
   text: string,
   sourceRef: string,
   query: string,
   candidates: Search["candidates"],
-): { title: string; description: string; key: string } {
+): {
+  title: string;
+  description: string;
+  key: string;
+  phrase: string;
+  candidateExtensions: string[];
+} {
   const oneLine = text.replace(/\s+/g, " ").trim();
   const title = `Recipe wanted: ${oneLine.slice(0, 80)}`;
   const searched = query || "nothing (no content words)";
@@ -629,7 +645,13 @@ export function requestDraft(
     `Found: ${found}`,
     `Logged by puddlerouter (${sourceRef}).`,
   ].join("\n");
-  return { title, description, key: sourceRef };
+  return {
+    title,
+    description,
+    key: sourceRef,
+    phrase: text.length <= MAX_PHRASE ? text : "",
+    candidateExtensions: candidates.map((c) => c.name),
+  };
 }
 
 /**
@@ -656,6 +678,8 @@ export function captureSearch(
     requestTitle: text.replace(/\s+/g, " ").trim().slice(0, 80),
     requestDescription: description,
     requestKey: sourceRef,
+    requestPhrase: "",
+    requestCandidates: [],
     requestRequester: "",
     searchedAt: now.toISOString(),
   };
@@ -749,6 +773,8 @@ export async function searchTurn(
     requestTitle: d.title,
     requestDescription: d.description,
     requestKey: d.key,
+    requestPhrase: d.phrase,
+    requestCandidates: d.candidateExtensions,
     requestRequester: "",
     searchedAt: now.toISOString(),
   };
@@ -1027,6 +1053,12 @@ export const model = {
       toVersion: "2026.11.05.1",
       description:
         "Recipes are tried before Jev, and alwaysLlm phrases go straight to Claude. No settings changed.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.09.1",
+      description:
+        "A Capture request carries the turn as its phrase and the candidates' names. No settings changed.",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
     {

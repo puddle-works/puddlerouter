@@ -601,6 +601,37 @@ Deno.test("requestDraft makes a one-line title, a plain description with the tur
   assertEquals(d.key, "puddlerouter:0123456789abcdef");
 });
 
+Deno.test("requestDraft gives the turn unchanged as the phrase, and the candidates in order", () => {
+  const text = "list the hetzner servers\nin my account " + "x".repeat(200);
+  const d = requestDraft(text, "puddlerouter:0123456789abcdef", "hetzner", [
+    { name: "@swamp/hetzner-cloud", description: "Hetzner" },
+    { name: "@acme/servers", description: "" },
+    { name: "@acme/cloud", description: "Clouds" },
+  ]);
+  assertEquals(d.phrase, text);
+  assertEquals(d.candidateExtensions, [
+    "@swamp/hetzner-cloud",
+    "@acme/servers",
+    "@acme/cloud",
+  ]);
+});
+
+Deno.test("requestDraft leaves the phrase blank when Capture can't hold it", () => {
+  const atLimit = "y".repeat(500);
+  assertEquals(requestDraft(atLimit, "r", "", []).phrase, atLimit);
+  const over = "y".repeat(501);
+  const d = requestDraft(over, "r", "", []);
+  assertEquals(d.phrase, "");
+  assert(d.description.startsWith(over), "the turn is still in the description");
+});
+
+Deno.test("searchTurn passes the phrase, and no candidates when the turn has no content words", async () => {
+  const m = await searchTurn("is it?", fakeExec({}).exec);
+  assertEquals(m.query, "");
+  assertEquals(m.requestPhrase, "is it?");
+  assertEquals(m.requestCandidates, []);
+});
+
 Deno.test("searchTurn carries the request draft for a turn nothing can answer", async () => {
   const m = await searchTurn(
     "list the hetzner servers",
@@ -612,6 +643,8 @@ Deno.test("searchTurn carries the request draft for a turn nothing can answer", 
   assertEquals(m.requestKey, "puddlerouter:0123456789abcdef");
   assertMatch(m.requestTitle, /^Recipe wanted: list the hetzner servers/);
   assertMatch(m.requestDescription, /Logged by puddlerouter/);
+  assertEquals(m.requestPhrase, "list the hetzner servers");
+  assertEquals(m.requestCandidates, []);
 });
 
 Deno.test("buildReply blocks with the request link when one was logged", () => {
@@ -1142,6 +1175,9 @@ Deno.test("captureSearch drafts the request from the turn without searching", ()
   assertMatch(m.requestDescription, /capture: prefix/);
   assertMatch(m.requestDescription, /puddlerouter:0123456789abcdef/);
   assertEquals(m.requestKey, "puddlerouter:0123456789abcdef");
+  // A capture: turn says what is wanted; it is not a phrase to answer.
+  assertEquals(m.requestPhrase, "");
+  assertEquals(m.requestCandidates, []);
   assertEquals(m.searchedAt, "2026-10-27T10:00:00.000Z");
 });
 
