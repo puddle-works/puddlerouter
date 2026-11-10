@@ -140,7 +140,13 @@ rest still applies.
 - `reads:` methods you know only read, as `"<extension> <method>"`, with no
   wildcards. Recipes that call one answer at once; any other method asks first.
   You are vouching for that method. Only this file can set it: a pack can't.
-- `recipes:` your own recipes, tried before those from packs.
+- `recipes:` your own recipes, tried before those from packs. The example has
+  `capture-raised-requests` ("my requests", "what have I raised"), which lists
+  the Capture requests you are on, the router's raised ones included. Set its
+  `as` to the same email as `requester:`: Capture lists only the requests the
+  person acting is on, and Intake Bot is not on the ones it logs for you. Its
+  `reads:` entry names Capture's type, `@puddleworks/capture/requests`, which
+  needs `@puddleworks/recipes` 2026.11.10.1; with an older one it asks first.
 - `requester:` the email of the person this repo routes turns for. Capture
   requests are logged as theirs, with Intake Bot recorded as the account that
   logged them. They must be in Capture's people list: if not, Capture refuses
