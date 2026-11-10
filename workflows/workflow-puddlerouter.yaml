@@ -18,7 +18,8 @@ description: >-
   search too: in live mode raise logs it in Capture as typed. In shadow mode the
   reply always passes, so the run is a log of what live mode would do. The route
   question must stay the same as in puddlerouter-route-eval, and the decision
-  question as in puddlerouter-decision-eval.
+  question as in puddlerouter-decision-eval. split logs what a turn's
+  first piece would hit on its own (issue #25); no step reads it.
 version: 1
 tags:
   maxReruns: "3"
@@ -68,7 +69,7 @@ inputs:
   required: [turnFile]
 jobs:
   - name: main
-    description: load, alwaysLlm, recall, confirm, merged, match, route, decide, search, pick, execute, raise, reply.
+    description: load, alwaysLlm, recall, confirm, merged, match, split, route, decide, search, pick, execute, raise, reply.
     dependsOn: []
     weight: 0
     steps:
@@ -169,6 +170,34 @@ jobs:
           methodName: merged
           inputs:
             text: ${{ steps.load.outputs.text }}
+      - name: split
+        description: >-
+          Cut the turn at commas, "then", sentence ends and spaced dashes, and
+          try the first of two or more pieces against the merged phrasing and
+          the recipes (match only; issue #25). Logged only: no step reads it.
+          Runs after match, so the two never wait on the recipes lock
+          together. Skipped for an empty, withheld or capture: turn and a
+          phrase on the alwaysLlm list.
+        dependsOn:
+          - step: load
+            condition:
+              type: succeeded
+          - step: alwaysLlm
+            condition:
+              type: always
+          - step: match
+            condition:
+              type: always
+        weight: 0
+        allowFailure: true
+        guard: '${{ steps.load.outputs.empty || steps.load.outputs.withheld || steps.load.outputs.capture || (has(steps.alwaysLlm) && has(steps.alwaysLlm.outputs) && steps.alwaysLlm.outputs.matched) }}'
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: split
+          inputs:
+            text: ${{ steps.load.outputs.text }}
+            repoDir: ${{ inputs.repoDir }}
       - name: match
         description: >-
           Try the turn against the recipes, through @puddleworks/recipes, before

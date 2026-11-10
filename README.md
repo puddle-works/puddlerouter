@@ -412,6 +412,31 @@ swamp data query 'modelName == "puddlerouter" && name == "reply" && version >= 0
            | {median: .[length/2|floor], p95: .[(length*0.95)|floor]})}'
 ```
 
+Whether splitting a turn would help (issue #25): the `split` step cuts each
+routed turn at `,`, ` then `, `. ` and ` - ` and stores a `split` resource:
+the pieces, and, for two or more, what the first piece would hit on its own
+(`firstKind`: `merged`, `recipe` or `none`; `firstRecipe`). It tries the
+recipes' `match` only, never runs a recipe and sends no piece to Jev. No other
+step reads it, so it changes nothing in shadow or live mode.
+
+```sh
+# Turns that split: the first piece, what it would hit, and what the turn did
+swamp data query 'modelName == "puddlerouter" && version >= 0 && workflowName == "@puddleworks/puddlerouter"' --json \
+  | jq -c '[.results[] | {run: .workflowRunId, name, content}] | group_by(.run)[]
+      | (map({(.name): .content}) | add) as $d | select($d.split.count >= 2)
+      | {text: $d.turn.text, first: $d.split.first, pieces: $d.split.count,
+         hit: $d.split.firstKind, recipe: $d.split.firstRecipe,
+         route: $d.reply.route, reason: $d.reply.reason}'
+
+# Totals: turns split, what their first pieces hit, by recipe, failed recipe calls
+swamp data query 'modelName == "puddlerouter" && name == "split" && version >= 0' --select content --json \
+  | jq -c '[.results[] | .content // .] | {turns: length,
+      split: map(select(.count >= 2)) | length,
+      first: (map(select(.count >= 2)) | group_by(.firstKind) | map({(.[0].firstKind): length}) | add),
+      recipes: ([.[] | select(.firstRecipe != "") | .firstRecipe] | group_by(.) | map({(.[0]): length}) | add),
+      failed: map(select(.error != "")) | length}'
+```
+
 `elapsedMs` runs from the hook starting to the reply being stored. In live mode
 the hook then reads the reply, which adds about 1.2 s.
 
