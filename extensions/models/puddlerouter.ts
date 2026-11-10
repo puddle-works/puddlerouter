@@ -156,9 +156,14 @@ export const MergedSchema = MergedCheckSchema.extend({
 
 /** Arguments for `split`. */
 export const SplitArgsSchema = z.object({
-  text: z.string().describe("The cleaned turn text."),
+  turnFile: z.string().min(1).describe(
+    "Path of a copy of the turn file; the hook writes it with mktemp.",
+  ),
   repoDir: z.string().min(1).default(".").describe(
-    "The runtime repo; the recipes instance there tries the first piece.",
+    "The runtime repo: its puddlerouter.yaml and its recipes instance.",
+  ),
+  maxChars: z.number().int().positive().default(2000).describe(
+    "Longest cleaned text kept, as in load.",
   ),
 });
 /** The arguments `split` accepts. */
@@ -169,6 +174,8 @@ export type SplitArgs = z.infer<typeof SplitArgsSchema>;
  * first piece only says a PR merged. Only logged; nothing acts on it.
  */
 export const SplitSchema = z.object({
+  /** The turn's sourceRef, as on its `turn` and `reply`. */
+  sourceRef: z.string(),
   pieces: z.array(z.string()),
   count: z.number().int(),
   /** The first piece when there are two or more; empty otherwise. */
@@ -1174,7 +1181,7 @@ function resourceStore(context: MethodContext): Store {
 /** The model type: `load`, `alwaysLlm`, `recall`, `merged`, `search` and `reply`. */
 export const model = {
   type: "@puddleworks/puddlerouter",
-  version: "2026.11.10.2",
+  version: "2026.11.10.3",
   upgrades: [
     {
       toVersion: "2026.11.04.1",
@@ -1210,6 +1217,12 @@ export const model = {
       toVersion: "2026.11.10.2",
       description:
         "A stats method counts the shadow log's turns, routes and actions (issue #14). No settings changed.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.10.3",
+      description:
+        "split reads the turn file and runs in its own workflow after the reply (issue #25). No settings changed.",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -1366,11 +1379,27 @@ export const model = {
     },
     split: {
       description:
-        "Cut the turn into pieces and try the first against the merged " +
-        "phrasing and the recipes (match only); store `split`. Logged only.",
+        "Read a turn file, cut the turn into pieces and try the first " +
+        "against the merged phrasing and the recipes (match only); store " +
+        "`split`. Logged only; the hook runs it after the reply. Nothing is " +
+        "stored for an empty, withheld, capture: or always-LLM turn.",
       arguments: SplitArgsSchema,
       execute: async (args: SplitArgs, context: MethodContext) => {
-        const pieces = splitTurn(args.text);
+        // Cleaned as load cleans it, so the pieces match what was routed.
+        const turn = await loadTurn(
+          await Deno.readTextFile(args.turnFile),
+          args.maxChars,
+        );
+        const { alwaysLlm } = await loadConfig(args.repoDir);
+        const skip = turn.empty || turn.withheld || turn.capture ||
+          alwaysLlmHit(turn.text, alwaysLlm) !== "";
+        if (skip) {
+          context.logger.info("Not split: {sourceRef}", {
+            sourceRef: turn.sourceRef,
+          });
+          return { dataHandles: [] };
+        }
+        const pieces = splitTurn(turn.text);
         const first = pieces.length >= 2 ? pieces[0] : "";
         const firstMerged = first !== "" && matchMerged(first) !== null;
         let firstKind: "merged" | "recipe" | "none" = firstMerged
@@ -1397,6 +1426,7 @@ export const model = {
           }
         }
         const handle = await context.writeResource("split", "split", {
+          sourceRef: turn.sourceRef,
           pieces,
           count: pieces.length,
           first,

@@ -1160,10 +1160,18 @@ only Claude can do, such as "merged, next". This step only logs it.
   means it can't change what a turn does.
 - **Logged in both modes.** The hook runs in live mode, so a shadow-only log
   would see few turns. Nothing acts on it in either.
-- **After `match`.** `split` also calls the `recipes` instance, and two calls
-  at once would wait on its lock, so it runs after `match`, alongside Jev's
-  `route`. Its call rewrites the recipes instance's `match` data; nothing reads
-  that data outside the run.
+- **Off the reply path (2026.11.10.3).** At first `split` was a step of the
+  router workflow, after `match`. The hook waits for the whole workflow, and
+  swamp started `reply` only once `split` was done, though `reply` doesn't read
+  it: with a 3 s sleep put in `split`, the hook waited 6.2 s instead of about
+  2. So `split` now reads a copy of the turn file and runs alone in
+  `@puddleworks/puddlerouter-split`, which the hook starts in the background as
+  it exits, as it starts the daily recipes sync. It cleans the turn as `load`
+  does and stores the turn's `sourceRef`, so the README joins it to the reply.
+  Its `match` call rewrites the recipes instance's `match` data; nothing reads
+  that data outside a run. On the one turn a day that also starts the recipes
+  sync, the two wait on the recipes lock, and a first piece may be logged as
+  `none` with an error.
 - **Skipped** for an empty, withheld or `capture:` turn and a phrase on the
   `alwaysLlm` list. A failed recipe call is stored in `error` and the first
   piece counts as `none`.
@@ -1180,6 +1188,21 @@ only Claude can do, such as "merged, next". This step only logs it.
 Each run took 1.8 to 2.2 s; `route` failed there for want of a Jev key, so the
 figures leave out Jev. The README queries under "Read the shadow log" gave the
 rows above and `{"turns":4,"split":3,"first":{"merged":1,"none":1,"recipe":1},"recipes":{"git-status":1},"failed":0}`.
+
+### Off the reply path (real hook, this repo, 2026-11-10)
+
+The real hook in shadow mode, the same five turns on each, 8 s apart so
+nothing waits on a lock, after one warm-up turn:
+
+| Code | Hook time per turn (ms) | Median |
+|---|---|---|
+| main, `split` in the router workflow | 3011, 2929, 3060, 3055, 3072 | 3055 |
+| 2026.11.10.3, `split` in the background | 2996, 2949, 3023, 2981, 2927 | 2981 |
+
+About 75 ms less per turn, the time `split` took on its own. Four turns sent
+back to back took 2.8 to 3.1 s each, and all four `split` records were stored
+with no error. The hook's own copy of the turn and `split`'s copy were both
+gone afterwards.
 
 **Next:** after a week, count the split turns whose first piece hits `merged`
 or a recipe while the whole turn went to Claude, then decide whether to build

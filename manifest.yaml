@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@puddleworks/puddlerouter"
-version: "2026.11.10.2"
+version: "2026.11.10.3"
 description: "Routes each turn typed into Claude Code to swamp, Jev or Claude. In live mode Jev answers yes/no questions without Claude; shadow mode (the default) logs what live mode would do and always lets Claude run."
 repository: "https://github.com/puddle-works/puddlerouter"
 visibility: public
@@ -13,6 +13,7 @@ models:
 workflows:
   - workflow-puddlerouter.yaml
   - workflow-puddlerouter-key-check.yaml
+  - workflow-puddlerouter-split.yaml
 dependencies:
   - "@swamp/git"
   - "@webframp/github"

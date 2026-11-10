@@ -1776,14 +1776,30 @@ function recipesFake(reply: (text: string) => Record<string, unknown> | Error) {
   return { calls, runModel };
 }
 
-async function runSplit(text: string, runModel?: unknown) {
+// split reads the turn from its file, as the hook hands it over.
+async function splitWritten(
+  text: string,
+  runModel?: unknown,
+  repoDir = "/desk",
+): Promise<Written[]> {
   const w: Written[] = [];
-  await model.methods.split.execute(
-    { text, repoDir: "/desk" },
-    { ...fakeContext(w), runModel } as Parameters<
-      typeof model.methods.split.execute
-    >[1],
-  );
+  const turnFile = await Deno.makeTempFile();
+  try {
+    await Deno.writeTextFile(turnFile, text);
+    await model.methods.split.execute(
+      { turnFile, repoDir, maxChars: 2000 },
+      { ...fakeContext(w), runModel } as Parameters<
+        typeof model.methods.split.execute
+      >[1],
+    );
+  } finally {
+    await Deno.remove(turnFile);
+  }
+  return w;
+}
+
+async function runSplit(text: string, runModel?: unknown) {
+  const w = await splitWritten(text, runModel);
   assertEquals(w.map((x) => [x.spec, x.name]), [["split", "split"]]);
   return w[0].data;
 }
@@ -1928,4 +1944,45 @@ Deno.test("stats reads every stored reply and stores one stats instance", async 
       >[1],
     )
   );
+});
+
+Deno.test("split cleans the turn as load does and keeps its sourceRef", async () => {
+  const fake = recipesFake(() => ({ matched: false, recipeId: "" }));
+  const data = await runSplit("  git status,   then fix it\n", fake.runModel);
+  assertEquals(data.pieces, ["git status", "fix it"]);
+  // The same sourceRef as the turn's reply, so the two can be joined.
+  assertEquals(
+    data.sourceRef,
+    (await loadTurn("  git status,   then fix it\n", 2000)).sourceRef,
+  );
+});
+
+Deno.test("split logs nothing for a capture:, withheld, empty or always-LLM turn", async () => {
+  const fake = recipesFake(() => ({ matched: true, recipeId: "git-status" }));
+  for (
+    const t of [
+      "capture: git status, then fix it",
+      "git status, then use sk-ant-api03-" + "a".repeat(40),
+      "[pasted text]",
+    ]
+  ) assertEquals(await splitWritten(t, fake.runModel), [], t);
+  const repo = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      `${repo}/puddlerouter.yaml`,
+      "alwaysLlm:\n  - '^load the handover doc'\n",
+    );
+    assertEquals(
+      await splitWritten("load the handover doc, then go", fake.runModel, repo),
+      [],
+    );
+    // The same repo still logs a turn the list doesn't name.
+    assertEquals(
+      (await splitWritten("git status, then go", fake.runModel, repo)).length,
+      1,
+    );
+  } finally {
+    await Deno.remove(repo, { recursive: true });
+  }
+  assertEquals(fake.calls.length, 1);
 });

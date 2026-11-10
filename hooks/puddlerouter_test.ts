@@ -22,6 +22,13 @@ for arg in "$@"; do
 done
 [ -n "\${FAKE_SWAMP_HANG:-}" ] && sleep 30
 case "$*" in *recipes-sync*) [ -n "\${FAKE_SWAMP_SYNC_HANG:-}" ] && sleep 30 ;; esac
+case "$*" in *puddlerouter-split*)
+  for arg in "$@"; do
+    case "$arg" in turnFile=*) cat "\${arg#turnFile=}" > "$log.split" ;; esac
+  done
+  [ -n "\${FAKE_SWAMP_SPLIT_HANG:-}" ] && sleep 30
+  exit 0 ;;
+esac
 [ -n "\${FAKE_SWAMP_FAIL:-}" ] && { echo boom >&2; exit 1; }
 case "$1 $2" in
   "workflow run") echo '{"id":"run-1","status":"succeeded"}' ;;
@@ -96,6 +103,7 @@ async function runHook(
         TMPDIR: dir,
         PUDDLEROUTER_KEY_CHECK: "off",
         PUDDLEROUTER_RECIPES_SYNC: "off",
+        PUDDLEROUTER_SPLIT: "off",
         // Most tests check shadow mode; the default is live (step 5).
         PUDDLEROUTER_MODE: "shadow",
         ...env,
@@ -580,6 +588,67 @@ Deno.test("a skipped turn with no session id has no plan to drop", async () => {
     stdin: JSON.stringify({ prompt: "/review" }),
   });
   assertEquals(liveNote(run).note, "puddlerouter: not routed (a /command)");
+  assertEquals(run.calls, []);
+});
+
+// ---- the split log (issue #25) ----
+
+const SPLIT =
+  /^workflow run @puddleworks\/puddlerouter-split --repo-dir (\S+) --input turnFile=\/\S+ --input repoDir=\1$/;
+
+Deno.test("starts split in the background after the reply, from its own copy of the turn", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const log = `${dir}/log`;
+    const run = await runHook("git status, then fix the test", {
+      PUDDLEROUTER_SPLIT: "on",
+      PUDDLEROUTER_MODE: "live",
+      FAKE_SWAMP_REPLY: "block",
+      FAKE_SWAMP_TEXT: "On branch main",
+      FAKE_SWAMP_SPLIT_HANG: "1",
+      FAKE_SWAMP_LOG: log,
+      TMPDIR: dir,
+    }, { waitForSwamp: true });
+    // The reply is out at once, though split is still running.
+    assert(run.ms < 2000, `took ${run.ms} ms`);
+    assertEquals(JSON.parse(run.stdout).decision, "block");
+    assert(await waitFor(`${log}.split`, 3000), "split never ran");
+    assertEquals(
+      await Deno.readTextFile(`${log}.split`),
+      "git status, then fix the test",
+    );
+    const calls = (await Deno.readTextFile(`${log}.args`)).trim().split("\n");
+    const split = calls.filter((c) => c.includes("puddlerouter-split"));
+    assertEquals(split.length, 1);
+    assertMatch(split[0], SPLIT);
+    assert(!split[0].includes("git status"), "the turn text is not an argument");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("split's copy of the turn is removed once it has run", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const log = `${dir}/log`;
+    await runHook("git status, then fix the test", {
+      PUDDLEROUTER_SPLIT: "on",
+      FAKE_SWAMP_LOG: log,
+      TMPDIR: dir,
+    }, { waitForSwamp: true });
+    assert(await waitFor(`${log}.split`, 3000), "split never ran");
+    await new Promise((r) => setTimeout(r, 300));
+    const left = [...Deno.readDirSync(dir)].map((e) => e.name)
+      .filter((n) => !n.startsWith("log"));
+    assertEquals(left, []);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("a skipped turn starts no split", async () => {
+  const run = await runHook("/review", { PUDDLEROUTER_SPLIT: "on" });
+  await new Promise((r) => setTimeout(r, 300));
   assertEquals(run.calls, []);
 });
 
