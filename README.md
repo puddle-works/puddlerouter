@@ -335,7 +335,8 @@ repo puddlerouter runs in and logs Capture requests in (default
 `~/dev/puddlerouter`); `PUDDLEROUTER_TIMEOUT` seconds to wait for swamp
 (default 15); `PUDDLEROUTER_KEY_CHECK=off` skips the daily key check and
 `PUDDLEROUTER_RECIPES_SYNC=off` the daily recipes sync, whose day stamps are kept
-in `PUDDLEROUTER_STATE` (default `~/.local/state/puddlerouter`).
+in `PUDDLEROUTER_STATE` (default `~/.local/state/puddlerouter`);
+`PUDDLEROUTER_SPLIT=off` skips the background split log (issue #25).
 Start a turn with `llm:` to skip the router for that turn, or with `capture:`
 to log it straight in Capture without asking Jev (see
 [Capture requests](#capture-requests)).
@@ -422,21 +423,24 @@ swamp data query 'modelName == "puddlerouter" && name == "reply" && version >= 0
            | {median: .[length/2|floor], p95: .[(length*0.95)|floor]})}'
 ```
 
-Whether splitting a turn would help (issue #25): the `split` step cuts each
-routed turn at `,`, ` then `, `. ` and ` - ` and stores a `split` resource:
-the pieces, and, for two or more, what the first piece would hit on its own
-(`firstKind`: `merged`, `recipe` or `none`; `firstRecipe`). It tries the
-recipes' `match` only, never runs a recipe and sends no piece to Jev. No other
-step reads it, so it changes nothing in shadow or live mode.
+Whether splitting a turn would help (issue #25): after each routed turn, as
+it exits, the hook starts `@puddleworks/puddlerouter-split` in the background,
+so no reply waits for it. Its `split` step cuts the turn at `,`, ` then `, `. `
+and ` - ` and stores a `split` resource: the turn's `sourceRef`, the pieces,
+and, for two or more, what the first piece would hit on its own (`firstKind`:
+`merged`, `recipe` or `none`; `firstRecipe`). It tries the recipes' `match`
+only, never runs a recipe and sends no piece to Jev. Nothing reads it, so it
+changes nothing in shadow or live mode. `PUDDLEROUTER_SPLIT=off` turns it off.
 
 ```sh
-# Turns that split: the first piece, what it would hit, and what the turn did
-swamp data query 'modelName == "puddlerouter" && version >= 0 && workflowName == "@puddleworks/puddlerouter"' --json \
-  | jq -c '[.results[] | {run: .workflowRunId, name, content}] | group_by(.run)[]
-      | (map({(.name): .content}) | add) as $d | select($d.split.count >= 2)
-      | {text: $d.turn.text, first: $d.split.first, pieces: $d.split.count,
-         hit: $d.split.firstKind, recipe: $d.split.firstRecipe,
-         route: $d.reply.route, reason: $d.reply.reason}'
+# Turns that split: the pieces, what the first would hit, and what the turn did
+swamp data query 'modelName == "puddlerouter" && name in ["split", "reply"] && version >= 0' --json \
+  | jq -c '[.results[] | {name, c: .content}] as $all
+      | ($all | map(select(.name == "reply") | .c) | sort_by(.repliedAt)
+         | map({(.sourceRef): .}) | add // {}) as $reply
+      | $all[] | select(.name == "split" and .c.count >= 2) | .c
+      | ($reply[.sourceRef // ""] // {}) as $r
+      | {pieces, hit: .firstKind, recipe: .firstRecipe, route: $r.route, reason: $r.reason}'
 
 # Totals: turns split, what their first pieces hit, by recipe, failed recipe calls
 swamp data query 'modelName == "puddlerouter" && name == "split" && version >= 0' --select content --json \

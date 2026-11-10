@@ -1,0 +1,38 @@
+id: 012f461a-19fa-48b5-9595-53776f74dead
+name: "@puddleworks/puddlerouter-split"
+description: >-
+  Log what a routed turn's first piece would hit on its own (issue #25). split
+  reads a copy of the turn file, cleans it as load does, cuts it at commas,
+  "then", sentence ends and spaced dashes, and tries the first of two or more
+  pieces against the merged phrasing and the recipes (match only). Nothing
+  reads what it stores. The hook starts this in the background as it exits,
+  after the reply, so no turn waits for it. Nothing is stored for an empty,
+  withheld or capture: turn, or a phrase on the alwaysLlm list.
+version: 1
+tags:
+  maxReruns: "3"
+  maxWallClock: "1m"
+inputs:
+  type: object
+  properties:
+    turnFile:
+      type: string
+      description: Path of the hook's copy of the turn file.
+    repoDir:
+      type: string
+      default: "."
+      description: The runtime swamp repo; its puddlerouter.yaml and recipes instance.
+  required: [turnFile]
+jobs:
+  - name: main
+    steps:
+      - name: split
+        description: Split the turn and store what its first piece would hit.
+        allowFailure: true
+        task:
+          type: model_method
+          modelIdOrName: puddlerouter
+          methodName: split
+          inputs:
+            turnFile: ${{ inputs.turnFile }}
+            repoDir: ${{ inputs.repoDir }}

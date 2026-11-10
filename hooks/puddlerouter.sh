@@ -28,6 +28,7 @@
 #   PUDDLEROUTER_SWAMP       swamp binary (default swamp; tests use a fake)
 #   PUDDLEROUTER_KEY_CHECK=off  skip the daily key check
 #   PUDDLEROUTER_RECIPES_SYNC=off  skip the daily recipes sync
+#   PUDDLEROUTER_SPLIT=off   skip the split log (issue #25)
 #   PUDDLEROUTER_STATE       where the day stamps are kept
 #                            (default ~/.local/state/puddlerouter)
 #
@@ -40,6 +41,11 @@
 # `@puddleworks/recipes-sync` workflow in the background, which gathers the
 # recipes of the installed packs. It starts as the hook exits, because the
 # turn's own workflow needs the same lock. A failed sync waits for the next day.
+#
+# Split log (issue #25): each routed turn also starts the
+# `@puddleworks/puddlerouter-split` workflow in the background as the hook
+# exits, after the reply, so no turn waits for it. It gets its own copy of the
+# turn file, removed when it finishes; the hook's own copy goes at once.
 #
 # Session: the session id goes to the workflow as `sessionId` when it has a safe
 # shape (swamp reads a value starting with `@` as a file). A recipe that makes
@@ -107,9 +113,19 @@ if [ "${PUDDLEROUTER_RECIPES_SYNC:-on}" != off ] &&
   sync_due=1
 fi
 
-turn= out=
-# Starts the daily sync last: it holds the lock the turn's workflow needs.
+turn= out= split_due=
+# Starts the split log and the daily sync last: they take locks the turn's
+# workflow needs.
 on_exit() {
+  local copy
+  if [ -n "$split_due" ] && copy=$(mktemp "${TMPDIR:-/tmp}/puddlerouter-split.XXXXXX") &&
+    cp "$turn" "$copy"; then
+    (
+      "$SWAMP" workflow run @puddleworks/puddlerouter-split --repo-dir "$REPO" \
+        --input "turnFile=$copy" --input "repoDir=$REPO"
+      rm -f "$copy"
+    ) </dev/null >/dev/null 2>&1 &
+  fi
   rm -f "$turn" "$out"
   if [ -n "$sync_due" ]; then
     "$SWAMP" workflow run @puddleworks/recipes-sync --repo-dir "$REPO" \
@@ -158,6 +174,7 @@ case "$turn" in
   *) exit 0 ;;
 esac
 printf '%s' "$prompt" > "$turn" || exit 0
+[ "${PUDDLEROUTER_SPLIT:-on}" != off ] && split_due=1
 
 run_args=(workflow run @puddleworks/puddlerouter --repo-dir "$REPO"
   --input "turnFile=$turn" --input "mode=$MODE"
