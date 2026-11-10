@@ -12,6 +12,8 @@ allow:
 reads:
   - "@webframp/github list_prs"
   - "@webframp/github list_workflows"
+  # The name swamp runs, so Capture's type (needs @puddleworks/recipes 2026.11.10.1).
+  - "@puddleworks/capture/requests list_requests"
 
 # Who Capture requests are logged for: your email, as in Capture's people list.
 # Unset, Intake Bot owns them. If Capture doesn't know the email, nothing is logged.
@@ -46,3 +48,21 @@ recipes:
     empty: "No open pull requests."
     # Optional: reuse a successful answer for this long (30s, 5m, 1h). Default none.
     cacheFor: 5m
+
+  # The Capture requests you are on, such as the ones the router raised for you.
+  # Capture lists only requests the person acting is on, so `as` must be the
+  # same email as `requester:` above; Intake Bot is not on the ones it logs.
+  - id: capture-raised-requests
+    extension: "@puddleworks/capture/requests"
+    method: list_requests
+    definition: capture
+    dataName: requests-mine-all
+    pattern: '^(?:(?:list|show)(?: me)? )?(?:my (?:capture |raised )?requests|(?:the )?(?:capture|raised) requests|what (?:requests )?(?:have i|did i) raise[d]?)[?.!]?$'
+    fixed:
+      as: you@example.com
+      scope: mine
+    each:
+      path: items
+      line: "#{number} {title}: {status}"
+    template: "Your Capture requests ({count}):\n{lines}"
+    empty: "You are on no Capture requests."
