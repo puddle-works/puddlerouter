@@ -29,6 +29,7 @@ import {
   sourceRef,
   splitTurn,
   type Store,
+  summariseReplies,
   withRecall,
 } from "./puddlerouter.ts";
 
@@ -1833,4 +1834,98 @@ Deno.test("split asks nothing for one piece and records a failed recipe call", a
   assertEquals([failed.firstKind, failed.error], ["none", "recipes is busy"]);
   const noRun = await runSplit("git status, then fix it");
   assertEquals(noRun.error, "runModel is not available");
+});
+
+// ---- router stats (issue #14) ----
+
+function replyAt(at: string, r: Record<string, unknown>) {
+  return {
+    attributes: {
+      mode: "shadow",
+      action: "pass",
+      wouldAction: "pass",
+      route: "llm",
+      recipe: "",
+      elapsedMs: null,
+      repliedAt: at,
+      ...r,
+    },
+  };
+}
+
+const STATS_REPLIES = [
+  replyAt("2026-11-10T10:00:00.000Z", { elapsedMs: 1000 }),
+  replyAt("2026-11-09T10:00:00.000Z", {
+    route: "deterministic",
+    wouldAction: "block",
+    recipe: "git-status",
+    elapsedMs: 3000,
+  }),
+  replyAt("2026-11-08T10:00:00.000Z", { wouldAction: "hint", elapsedMs: 2000 }),
+  // Live: what it did counts, not wouldAction.
+  replyAt("2026-11-07T10:00:00.000Z", {
+    mode: "live",
+    route: "decision",
+    action: "block",
+  }),
+  replyAt("2026-11-05T10:00:00.000Z", {
+    mode: "live",
+    route: "capture",
+    action: "block",
+    elapsedMs: 4000,
+  }),
+  // Nine days old: outside a seven-day window.
+  replyAt("2026-11-01T10:00:00.000Z", { elapsedMs: 9999 }),
+  { attributes: { repliedAt: "2026-11-10T09:00:00.000Z" } },
+  { attributes: null },
+];
+const STATS_NOW = new Date("2026-11-10T12:00:00.000Z");
+
+Deno.test("summariseReplies counts a window's turns, routes and actions", () => {
+  const s = summariseReplies(STATS_REPLIES, 7, STATS_NOW);
+  assertEquals(s.turns, 5);
+  assertEquals(s.since, "2026-11-03T12:00:00.000Z");
+  assertEquals(s.routeSplit, "llm 2, capture 1, decision 1, deterministic 1");
+  assertEquals(s.actionSplit, "block 3, hint 1, pass 1");
+  assertEquals(s.modeSplit, "shadow 3, live 2");
+  assertEquals(s.recipeTurns, 1);
+  // Median and 95th percentile as the README's query takes them.
+  assertEquals([s.medianMs, s.p95Ms], [3000, 4000]);
+  assertEquals(s.delay, "median 3000 ms, 95th percentile 4000 ms");
+  assertEquals(summariseReplies(STATS_REPLIES, 14, STATS_NOW).turns, 6);
+});
+
+Deno.test("summariseReplies says none for an empty window", () => {
+  const s = summariseReplies(STATS_REPLIES, 1, new Date("2026-12-01T00:00:00Z"));
+  assertEquals(
+    [s.turns, s.routeSplit, s.actionSplit, s.medianMs, s.delay],
+    [0, "none", "none", null, "no timings"],
+  );
+});
+
+Deno.test("stats reads every stored reply and stores one stats instance", async () => {
+  const w: Written[] = [];
+  const asked: string[] = [];
+  await model.methods.stats.execute({ days: 7 }, {
+    ...fakeContext(w),
+    queryData: (predicate: string) => {
+      asked.push(predicate);
+      return Promise.resolve(STATS_REPLIES);
+    },
+  } as unknown as Parameters<typeof model.methods.stats.execute>[1]);
+  // version >= 0 asks for every version, not only the latest reply.
+  assertEquals(asked, [
+    'modelType == "@puddleworks/puddlerouter" && name == "reply" && version >= 0',
+  ]);
+  assertEquals(w.map((x) => [x.spec, x.name]), [["stats", "stats"]]);
+  assertEquals(w[0].data.days, 7);
+  assertEquals(typeof w[0].data.turns, "number");
+  await assertRejects(() =>
+    model.methods.stats.execute(
+      { days: 7 },
+      fakeContext([]) as unknown as Parameters<
+        typeof model.methods.stats.execute
+      >[1],
+    )
+  );
 });

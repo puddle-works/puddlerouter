@@ -147,6 +147,10 @@ rest still applies.
   person acting is on, and Intake Bot is not on the ones it logs for you. Its
   `reads:` entry names Capture's type, `@puddleworks/capture/requests`, which
   needs `@puddleworks/recipes` 2026.11.10.1; with an older one it asks first.
+  It also has `router-stats` ("router stats"), which shows the shadow log's
+  totals for the last seven days through puddlerouter's read-only `stats`
+  method: the same counts as the totals query in
+  [Read the shadow log](#read-the-shadow-log).
 - `requester:` the email of the person this repo routes turns for. Capture
   requests are logged as theirs, with Intake Bot recorded as the account that
   logged them. They must be in Capture's people list: if not, Capture refuses

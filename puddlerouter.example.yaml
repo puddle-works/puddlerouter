@@ -14,6 +14,7 @@ reads:
   - "@webframp/github list_workflows"
   # The name swamp runs, so Capture's type (needs @puddleworks/recipes 2026.11.10.1).
   - "@puddleworks/capture/requests list_requests"
+  - "@puddleworks/puddlerouter stats"
 
 # Who Capture requests are logged for: your email, as in Capture's people list.
 # Unset, Intake Bot owns them. If Capture doesn't know the email, nothing is logged.
@@ -66,3 +67,14 @@ recipes:
       line: "#{number} {title}: {status}"
     template: "Your Capture requests ({count}):\n{lines}"
     empty: "You are on no Capture requests."
+
+  # The router's own shadow log: turns, routes and actions of the last week.
+  - id: router-stats
+    extension: "@puddleworks/puddlerouter"
+    method: stats
+    definition: puddlerouter
+    dataName: stats
+    pattern: '^(?:(?:show|what are)(?: me)? )?(?:the )?(?:puddle)?router (?:stats|statistics)[?.!]?$'
+    fixed:
+      days: "7"
+    template: "puddlerouter, last {days} days: {turns} turns ({modeSplit}).\nRoutes: {routeSplit}.\nDid or would: {actionSplit}.\nAnswered by a recipe: {recipeTurns}.\nDelay: {delay}."
