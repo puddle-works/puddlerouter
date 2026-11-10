@@ -345,6 +345,95 @@ export function alwaysLlmHit(text: string, patterns: RegExp[]): string {
   return patterns.find((re) => re.test(typed))?.source ?? "";
 }
 
+/** How far back `stats` counts. */
+export const StatsArgsSchema = z.object({
+  days: z.coerce.number().int().min(1).max(14).default(7).describe(
+    "How many days back to count; replies are kept for 14.",
+  ),
+});
+/** The arguments `stats` accepts. */
+export type StatsArgs = z.infer<typeof StatsArgsSchema>;
+
+/** The reply fields `stats` counts; a record without them is skipped. */
+const CountedReply = z.object({
+  mode: z.enum(["shadow", "live"]),
+  action: z.string(),
+  wouldAction: z.string(),
+  route: z.string(),
+  recipe: z.string(),
+  elapsedMs: z.number().nullable(),
+  repliedAt: z.iso.datetime(),
+});
+
+/** What `stats` stores (issue #14): the shadow log's totals for a window. */
+export const StatsSchema = z.object({
+  days: z.number().int(),
+  since: z.iso.datetime(),
+  turns: z.number().int(),
+  /** Turns per route, most first, as "llm 2, capture 1". */
+  routeSplit: z.string(),
+  /** What each turn did (live) or would do (shadow): "block 3, pass 1". */
+  actionSplit: z.string(),
+  modeSplit: z.string(),
+  /** Turns a recipe answered or would answer. */
+  recipeTurns: z.number().int(),
+  medianMs: z.number().nullable(),
+  p95Ms: z.number().nullable(),
+  delay: z.string(),
+  countedAt: z.iso.datetime(),
+});
+/** One `stats` record. */
+export type Stats = z.infer<typeof StatsSchema>;
+
+function tally(values: string[]): string {
+  const counts = new Map<string, number>();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  const rows = [...counts].sort((a, b) =>
+    b[1] - a[1] || (a[0] < b[0] ? -1 : 1)
+  );
+  return rows.length ? rows.map(([k, n]) => `${k} ${n}`).join(", ") : "none";
+}
+
+/**
+ * Totals over the stored replies from the last `days` days: what the README's
+ * shadow-log queries print, as text a recipe can show. A record that is not a
+ * reply is skipped. The median and 95th percentile are taken as those queries
+ * take them, so the numbers agree.
+ */
+export function summariseReplies(
+  records: unknown[],
+  days: number,
+  now: Date = new Date(),
+): Omit<Stats, "countedAt"> {
+  const since = new Date(now.getTime() - days * 86_400_000);
+  const replies = records.flatMap((r) => {
+    const p = CountedReply.safeParse(
+      (r as { attributes?: unknown } | null)?.attributes,
+    );
+    return p.success && new Date(p.data.repliedAt) >= since ? [p.data] : [];
+  });
+  const ms = replies.flatMap((r) => r.elapsedMs === null ? [] : [r.elapsedMs])
+    .sort((a, b) => a - b);
+  const medianMs = ms.length ? ms[Math.floor(ms.length / 2)] : null;
+  const p95Ms = ms.length ? ms[Math.floor(ms.length * 0.95)] : null;
+  return {
+    days,
+    since: since.toISOString(),
+    turns: replies.length,
+    routeSplit: tally(replies.map((r) => r.route)),
+    actionSplit: tally(
+      replies.map((r) => r.mode === "live" ? r.action : r.wouldAction),
+    ),
+    modeSplit: tally(replies.map((r) => r.mode)),
+    recipeTurns: replies.filter((r) => r.recipe !== "").length,
+    medianMs,
+    p95Ms,
+    delay: medianMs === null
+      ? "no timings"
+      : `median ${medianMs} ms, 95th percentile ${p95Ms} ms`,
+  };
+}
+
 /**
  * A turn cut into pieces at `,`, ` then `, a sentence end (`. `) and a spaced
  * dash (` - `), trimmed, empty pieces dropped (issue #25).
@@ -1068,6 +1157,8 @@ interface MethodContext {
   logger: { info: (msg: string, props: Record<string, unknown>) => void };
   /** Runs another model's method in process; `merged` uses it. */
   runModel?: RunModel;
+  /** A CEL query over swamp data; `stats` reads the stored replies with it. */
+  queryData?: (predicate: string) => Promise<unknown[]>;
 }
 
 /** A store over the method's own swamp resources. */
@@ -1083,7 +1174,7 @@ function resourceStore(context: MethodContext): Store {
 /** The model type: `load`, `alwaysLlm`, `recall`, `merged`, `search` and `reply`. */
 export const model = {
   type: "@puddleworks/puddlerouter",
-  version: "2026.11.10.1",
+  version: "2026.11.10.2",
   upgrades: [
     {
       toVersion: "2026.11.04.1",
@@ -1113,6 +1204,12 @@ export const model = {
       toVersion: "2026.11.10.1",
       description:
         "A split resource logs what a turn's first piece would hit (issue #25). No settings changed.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.10.2",
+      description:
+        "A stats method counts the shadow log's turns, routes and actions (issue #14). No settings changed.",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -1161,6 +1258,13 @@ export const model = {
       schema: MergedSchema,
       lifetime: "14d" as const,
       garbageCollection: 2000,
+    },
+    stats: {
+      description:
+        "The shadow log's totals for the last few days, for the router-stats recipe.",
+      schema: StatsSchema,
+      lifetime: "1d" as const,
+      garbageCollection: 10,
     },
     split: {
       description:
@@ -1234,6 +1338,28 @@ export const model = {
         context.logger.info("Merged {matched}: {summary}", {
           matched: hit !== null,
           summary: check.summary || check.error,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
+    stats: {
+      description:
+        "Count the stored replies of the last `days` days: turns, routes, " +
+        "actions and delay; store `stats`. Reads only.",
+      arguments: StatsArgsSchema,
+      execute: async (args: StatsArgs, context: MethodContext) => {
+        if (!context.queryData) throw new Error("queryData is not available");
+        const records = await context.queryData(
+          'modelType == "@puddleworks/puddlerouter" && name == "reply" && version >= 0',
+        );
+        const stats = {
+          ...summariseReplies(records, args.days),
+          countedAt: new Date().toISOString(),
+        };
+        const handle = await context.writeResource("stats", "stats", stats);
+        context.logger.info("Counted {turns} turns over {days} days", {
+          turns: stats.turns,
+          days: args.days,
         });
         return { dataHandles: [handle] };
       },

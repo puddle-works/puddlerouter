@@ -26,10 +26,12 @@ Deno.test("the example names its read-only method and no longer claims readOnly"
     "@webframp/github list_prs",
     "@webframp/github list_workflows",
     "@puddleworks/capture/requests list_requests",
+    "@puddleworks/puddlerouter stats",
   ]);
   assertEquals(doc.recipes.map((r) => r.id), [
     "github-open-prs",
     "capture-raised-requests",
+    "router-stats",
   ]);
   assertEquals(doc.recipes[0].readOnly, undefined);
 });
@@ -50,4 +52,22 @@ Deno.test("the raised-requests recipe runs list_requests as a person, by its typ
   const fixed = r.fixed as Record<string, string>;
   assertEquals(fixed.scope, "mine");
   assert(fixed.as !== "intake-bot@example.com" && fixed.as.includes("@"));
+});
+
+// The template may only name fields the stats resource stores.
+Deno.test("the router-stats recipe shows only fields stats stores", async () => {
+  const { StatsSchema } = await import("../puddlerouter.ts");
+  const doc = parse(await Deno.readTextFile(EXAMPLE)) as {
+    recipes: Array<Record<string, unknown>>;
+  };
+  const r = doc.recipes.find((x) => x.id === "router-stats")!;
+  assertEquals([r.extension, r.method, r.definition, r.dataName], [
+    "@puddleworks/puddlerouter",
+    "stats",
+    "puddlerouter",
+    "stats",
+  ]);
+  const used = [...String(r.template).matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+  assert(used.length > 0);
+  for (const f of used) assert(f in StatsSchema.shape, `${f} is not stored`);
 });
