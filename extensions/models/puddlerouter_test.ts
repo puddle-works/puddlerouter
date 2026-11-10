@@ -27,6 +27,7 @@ import {
   routeCacheKey,
   searchTurn,
   sourceRef,
+  splitTurn,
   type Store,
   withRecall,
 } from "./puddlerouter.ts";
@@ -1720,4 +1721,116 @@ Deno.test("reply with no match still uses a cached route", async () => {
   assertEquals(written.reply.choice, "llm");
   assertEquals(written.reply.cached, true);
   assertEquals(written.reply.reason, "llm route");
+});
+
+// ---- issue #25: log what a turn's first piece would hit (shadow only) ----
+
+Deno.test("splitTurn cuts at commas, then, sentence ends and spaced dashes", () => {
+  assertEquals(splitTurn("merged, next"), ["merged", "next"]);
+  assertEquals(splitTurn("close both, then start #12"), [
+    "close both",
+    "start #12",
+  ]);
+  assertEquals(
+    splitTurn("12 is merged. should the cache move to the recipes repo?"),
+    ["12 is merged", "should the cache move to the recipes repo?"],
+  );
+  assertEquals(splitTurn("12 done - run the handover skill"), [
+    "12 done",
+    "run the handover skill",
+  ]);
+  assertEquals(splitTurn("merged then clean up"), ["merged", "clean up"]);
+});
+
+Deno.test("splitTurn leaves a turn whole without a separator between words", () => {
+  for (
+    const t of [
+      "list the open prs in puddle-works/puddlerouter",
+      "is v1.2.3 out?",
+      "re-run the tests",
+      "what is the authentication token for",
+      "merged.",
+    ]
+  ) assertEquals(splitTurn(t), [t], t);
+  assertEquals(splitTurn("  ,  "), []);
+});
+
+type Call = {
+  modelType: string;
+  name: string;
+  method: string;
+  arguments?: Record<string, unknown>;
+};
+function recipesFake(reply: (text: string) => Record<string, unknown> | Error) {
+  const calls: Call[] = [];
+  const runModel = (call: Call) => {
+    calls.push(call);
+    const out = reply(String(call.arguments?.text));
+    return Promise.resolve(
+      out instanceof Error
+        ? { ok: false as const, error: { message: out.message } }
+        : { ok: true as const, resources: [{ attributes: out }] },
+    );
+  };
+  return { calls, runModel };
+}
+
+async function runSplit(text: string, runModel?: unknown) {
+  const w: Written[] = [];
+  await model.methods.split.execute(
+    { text, repoDir: "/desk" },
+    { ...fakeContext(w), runModel } as Parameters<
+      typeof model.methods.split.execute
+    >[1],
+  );
+  assertEquals(w.map((x) => [x.spec, x.name]), [["split", "split"]]);
+  return w[0].data;
+}
+
+Deno.test("split tries the first piece against merged, then the recipes", async () => {
+  const fake = recipesFake((t) =>
+    t === "git status"
+      ? { matched: true, recipeId: "git-status" }
+      : { matched: false, recipeId: "" }
+  );
+  const merged = await runSplit(
+    "merged, clean up the worktrees",
+    fake.runModel,
+  );
+  assertEquals(
+    [merged.count, merged.first, merged.firstKind, merged.firstRecipe],
+    [2, "merged", "merged", ""],
+  );
+  assertEquals(fake.calls, [], "a merged first piece needs no recipe call");
+  const recipe = await runSplit(
+    "git status, then fix the failing test",
+    fake.runModel,
+  );
+  assertEquals([recipe.firstKind, recipe.firstRecipe], [
+    "recipe",
+    "git-status",
+  ]);
+  assertEquals(fake.calls, [{
+    modelType: "@puddleworks/recipes",
+    name: "recipes",
+    method: "match",
+    arguments: { text: "git status", repoDir: "/desk" },
+  }], "no sessionId: match with one would drop the session's pending plan");
+  const none = await runSplit("12 done, run the handover skill", fake.runModel);
+  assertEquals([none.firstKind, none.firstMerged, none.error], [
+    "none",
+    false,
+    "",
+  ]);
+});
+
+Deno.test("split asks nothing for one piece and records a failed recipe call", async () => {
+  const fake = recipesFake(() => new Error("recipes is busy "));
+  const one = await runSplit("git status", fake.runModel);
+  assertEquals([one.count, one.first, one.firstKind], [1, "", "none"]);
+  assertEquals(fake.calls, []);
+  const failed = await runSplit("git status, then fix it", fake.runModel);
+  assertEquals([failed.firstKind, failed.error], ["none", "recipes is busy"]);
+  const noRun = await runSplit("git status, then fix it");
+  assertEquals(noRun.error, "runModel is not available");
 });

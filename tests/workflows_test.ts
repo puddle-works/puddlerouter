@@ -613,3 +613,43 @@ Deno.test("a matched recipe skips route, decide and search, and a failed match d
   }
   assertEquals((await stepOf(wf, "match")).allowFailure, true);
 });
+
+// Issue #25: log what a turn's first piece would hit. Nothing acts on it.
+Deno.test("split runs after match, never for an empty, withheld, capture: or always-LLM turn", async () => {
+  const step = await stepOf("workflow-puddlerouter.yaml", "split");
+  assertEquals(step.task.modelIdOrName, "puddlerouter");
+  assertEquals(step.task.methodName, "split");
+  assertEquals(step.allowFailure, true);
+  const guard = step.guard ?? "";
+  for (
+    const part of [
+      "steps.load.outputs.empty",
+      "steps.load.outputs.withheld",
+      CAPTURE,
+      ALWAYS_LLM,
+    ]
+  ) assert(guard.includes(part), `split guard lacks ${part}`);
+  // It calls the recipes instance too; after match, the two never share its lock.
+  assert(
+    step.dependsOn?.some((d) =>
+      d.step === "match" && d.condition.type === "always"
+    ),
+    "split lacks an always dep on match",
+  );
+  const inputs = step.task.inputs as Record<string, string>;
+  assert(inputs.text.includes("steps.load.outputs.text"));
+  assert(inputs.repoDir.includes("inputs.repoDir"));
+});
+
+Deno.test("no step reads split, so it can't change what a turn does", async () => {
+  const path = new URL(
+    "../workflows/workflow-puddlerouter.yaml",
+    import.meta.url,
+  );
+  const wf = parse(await Deno.readTextFile(path)) as Workflow;
+  for (const step of wf.jobs.flatMap((j) => j.steps)) {
+    if (step.name === "split") continue;
+    assert(!JSON.stringify(step).includes("steps.split"), step.name);
+    assert(!step.dependsOn?.some((d) => d.step === "split"), step.name);
+  }
+});

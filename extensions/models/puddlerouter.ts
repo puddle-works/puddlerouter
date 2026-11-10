@@ -154,6 +154,36 @@ export const MergedSchema = MergedCheckSchema.extend({
   checkedAt: z.iso.datetime(),
 });
 
+/** Arguments for `split`. */
+export const SplitArgsSchema = z.object({
+  text: z.string().describe("The cleaned turn text."),
+  repoDir: z.string().min(1).default(".").describe(
+    "The runtime repo; the recipes instance there tries the first piece.",
+  ),
+});
+/** The arguments `split` accepts. */
+export type SplitArgs = z.infer<typeof SplitArgsSchema>;
+
+/**
+ * What `split` stores (issue #25): the turn cut into pieces, and whether the
+ * first piece only says a PR merged. Only logged; nothing acts on it.
+ */
+export const SplitSchema = z.object({
+  pieces: z.array(z.string()),
+  count: z.number().int(),
+  /** The first piece when there are two or more; empty otherwise. */
+  first: z.string(),
+  /** True when `first` alone is a merged turn (the `merged` regex only). */
+  firstMerged: z.boolean(),
+  /** What `first` would hit alone: merged, a recipe, or none. */
+  firstKind: z.enum(["merged", "recipe", "none"]),
+  /** The recipe `first` matched; empty if none. */
+  firstRecipe: z.string(),
+  /** Why the recipes could not be tried; empty if they were. */
+  error: z.string(),
+  splitAt: z.iso.datetime(),
+});
+
 /** Arguments for `alwaysLlm`. */
 export const AlwaysLlmArgsSchema = z.object({
   text: z.string().describe("The cleaned turn text."),
@@ -314,6 +344,18 @@ export function alwaysLlmHit(text: string, patterns: RegExp[]): string {
     .trim();
   return patterns.find((re) => re.test(typed))?.source ?? "";
 }
+
+/**
+ * A turn cut into pieces at `,`, ` then `, a sentence end (`. `) and a spaced
+ * dash (` - `), trimmed, empty pieces dropped (issue #25).
+ */
+export function splitTurn(text: string): string[] {
+  return text.split(/,|\s+then\s+|\.\s+|\s+-\s+/i).map((p) => p.trim())
+    .filter(Boolean);
+}
+
+/** The recipes instance `split` asks about a turn's first piece. */
+const RECIPES = { modelType: "@puddleworks/recipes", name: "recipes" };
 
 /** Why an `alwaysLlm` turn passed; the hook shows it as the turn's note. */
 export const ALWAYS_LLM_REASON = "not routed (an always-LLM phrase)";
@@ -1041,7 +1083,7 @@ function resourceStore(context: MethodContext): Store {
 /** The model type: `load`, `alwaysLlm`, `recall`, `merged`, `search` and `reply`. */
 export const model = {
   type: "@puddleworks/puddlerouter",
-  version: "2026.11.09.2",
+  version: "2026.11.10.1",
   upgrades: [
     {
       toVersion: "2026.11.04.1",
@@ -1065,6 +1107,12 @@ export const model = {
       toVersion: "2026.11.09.2",
       description:
         "A Capture request is logged for the requester in puddlerouter.yaml. No settings changed.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.10.1",
+      description:
+        "A split resource logs what a turn's first piece would hit (issue #25). No settings changed.",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -1111,6 +1159,13 @@ export const model = {
       description:
         "Whether the turn only says a PR merged, and what checking it found.",
       schema: MergedSchema,
+      lifetime: "14d" as const,
+      garbageCollection: 2000,
+    },
+    split: {
+      description:
+        "The turn cut into pieces, and whether the first only says merged (logged only).",
+      schema: SplitSchema,
       lifetime: "14d" as const,
       garbageCollection: 2000,
     },
@@ -1179,6 +1234,55 @@ export const model = {
         context.logger.info("Merged {matched}: {summary}", {
           matched: hit !== null,
           summary: check.summary || check.error,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
+    split: {
+      description:
+        "Cut the turn into pieces and try the first against the merged " +
+        "phrasing and the recipes (match only); store `split`. Logged only.",
+      arguments: SplitArgsSchema,
+      execute: async (args: SplitArgs, context: MethodContext) => {
+        const pieces = splitTurn(args.text);
+        const first = pieces.length >= 2 ? pieces[0] : "";
+        const firstMerged = first !== "" && matchMerged(first) !== null;
+        let firstKind: "merged" | "recipe" | "none" = firstMerged
+          ? "merged"
+          : "none";
+        let firstRecipe = "";
+        let error = "";
+        if (first && !firstMerged) {
+          if (!context.runModel) error = "runModel is not available";
+          else {
+            const res = await context.runModel({
+              ...RECIPES,
+              method: "match",
+              arguments: { text: first, repoDir: args.repoDir },
+            });
+            const hit = res.ok ? res.resources[0]?.attributes : undefined;
+            if (!res.ok) error = res.error.message.trim();
+            else if (hit?.matched === true) {
+              firstKind = "recipe";
+              firstRecipe = typeof hit.recipeId === "string"
+                ? hit.recipeId
+                : "";
+            }
+          }
+        }
+        const handle = await context.writeResource("split", "split", {
+          pieces,
+          count: pieces.length,
+          first,
+          firstMerged,
+          firstKind,
+          firstRecipe,
+          error,
+          splitAt: new Date().toISOString(),
+        });
+        context.logger.info("Split into {count} pieces; first hits {kind}", {
+          count: pieces.length,
+          kind: firstKind,
         });
         return { dataHandles: [handle] };
       },

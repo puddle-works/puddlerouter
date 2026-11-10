@@ -16,6 +16,7 @@
 - [Where write recipes go](#where-write-recipes-go)
 - [Recipes move out (issue #49)](#recipes-move-out-issue-49)
 - [Other agents: Codex, OpenCode and Pi (issue #15)](#other-agents-codex-opencode-and-pi-issue-15)
+- [Splitting a turn: the first-piece log (issue #25)](#splitting-a-turn-the-first-piece-log-issue-25)
 
 ## Step 0: checks
 
@@ -1136,4 +1137,51 @@ only its path passed to swamp.
 script, Pi gets an extension, and OpenCode gets a plugin that can only hint.
 Whether to port before more live data, and whether the adapters live here or
 in their own repo, are still open (see the issue).
+
+## Splitting a turn: the first-piece log (issue #25)
+
+#25 asked how often a turn has a mechanical first part followed by something
+only Claude can do, such as "merged, next". This step only logs it.
+
+### Decisions
+
+- **Only the first piece is tried, and without Jev.** The `split` step cuts the
+  turn at `,`, ` then `, `. ` and ` - `. For two or more pieces it checks the
+  first against the `merged` phrasing (the regex only; no PR is checked), and
+  otherwise asks the `recipes` instance's `match` through `runModel`, as
+  `merged` calls `@swamp/git`. No recipe runs and no piece goes to Jev, so a
+  split turn costs no extra Jev call. In the 36 eval turns these separators cut
+  3 turns that aren't two requests (for example "is 'utilise' plain English,
+  yes or no?"), so a per-piece route would mostly measure bad cuts.
+- **Its own resource, not the reply.** `reply` already takes 30 arguments, the
+  most the registry lists for one method; one more and swamp-club drops the
+  extension's whole listing. So `split` stores everything in a `split`
+  resource and no other step reads it: a test fails if one does. That also
+  means it can't change what a turn does.
+- **Logged in both modes.** The hook runs in live mode, so a shadow-only log
+  would see few turns. Nothing acts on it in either.
+- **After `match`.** `split` also calls the `recipes` instance, and two calls
+  at once would wait on its lock, so it runs after `match`, alongside Jev's
+  `route`. Its call rewrites the recipes instance's `match` data; nothing reads
+  that data outside the run.
+- **Skipped** for an empty, withheld or `capture:` turn and a phrase on the
+  `alwaysLlm` list. A failed recipe call is stored in `error` and the first
+  piece counts as `none`.
+
+### Shadow runs (real workflow, this repo, 2026-11-10)
+
+| Turn | Pieces | First piece | `firstKind` |
+|---|---|---|---|
+| "merged, next" | 2 | "merged" | `merged` |
+| "git status, then fix the failing test" | 2 | "git status" | `recipe` (`git-status`) |
+| "12 done, run the handover skill" | 2 | "12 done" | `none` |
+| "refactor the reply method so it reads better" | 1 | | not split |
+
+Each run took 1.8 to 2.2 s; `route` failed there for want of a Jev key, so the
+figures leave out Jev. The README queries under "Read the shadow log" gave the
+rows above and `{"turns":4,"split":3,"first":{"merged":1,"none":1,"recipe":1},"recipes":{"git-status":1},"failed":0}`.
+
+**Next:** after a week, count the split turns whose first piece hits `merged`
+or a recipe while the whole turn went to Claude, then decide whether to build
+the live version.
 
