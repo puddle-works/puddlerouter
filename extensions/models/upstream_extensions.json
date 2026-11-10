@@ -112,8 +112,8 @@
     "publishedChannel": "stable"
   },
   "@puddleworks/recipes": {
-    "version": "2026.11.05.1",
-    "pulledAt": "2026-11-05T15:16:36.996Z",
+    "version": "2026.11.10.1",
+    "pulledAt": "2026-11-10T15:19:14.015Z",
     "files": [
       ".swamp/pulled-extensions/@puddleworks/recipes/files/LICENSE",
       ".swamp/pulled-extensions/@puddleworks/recipes/files/README.md",
@@ -126,8 +126,8 @@
       ".swamp/pulled-extensions/@puddleworks/recipes/models/recipes.ts",
       ".swamp/pulled-extensions/@puddleworks/recipes/workflows/workflow-recipes-sync.yaml"
     ],
-    "checksum": "60232a52e6aa8634640653c50aed297b1e31fdbc275ca46b1fb1b78f8a4e0e95",
-    "filesChecksum": "8851ebb3bc8752e552da5e4b2e47a9a910a4c9df33a96ae6a596ee3add21b895",
+    "checksum": "ce259a59d68bc6ff9dff04c36e1c8e313ff0a6c911cc5843d5a66076eb0e7ad5",
+    "filesChecksum": "f9bd93ee239c0005d8f556ba7fd9107b5dc5f901fb70b75f95049fde8a81c833",
     "serverUrl": "https://swamp-club.com",
     "publishedChannel": "stable"
   }
